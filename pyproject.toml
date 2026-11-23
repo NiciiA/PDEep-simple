@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdeep-simple"
+version = "0.1.0"
+description = "Small FEM datasets and geometry-conditioned PDE reconstruction models"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "torch>=2.1", "matplotlib>=3.7", "tomli>=2; python_version < '3.11'"]
+
+[tool.setuptools.packages.find]
+include = ["pdeep_simple*"]

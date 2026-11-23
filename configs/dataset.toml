@@ -1,0 +1,99 @@
+# Optional mathematical settings. Scalars are fixed; pairs are uniform ranges.
+# Integer ranges include both endpoints. Omitted options keep generation defaults.
+[basis]
+count = [4, 32]
+distribution = "gaussian" # or "uniform" with the same mean/std; Bayes then unsupported
+amplitude_mean = 0.0
+amplitude_std = 1.0
+scale_by_count = true     # std / sqrt(K); overlapping bases can still correlate
+width = [0.08, 0.25]      # fractions of the domain bounding-box dimensions
+
+[pdes.poisson]
+forcing_basis = [4, 32]
+
+[pdes.diffusion]
+forcing_basis = [4, 32]
+conductivity = [0.5, 2.0]
+coefficient_kind = "smooth" # constant, smooth, or mesh-aligned interface
+coefficient_basis = 8
+coefficient_contrast = 0.5  # a(x) = a0 * (1 + contrast*tanh(g(x)))
+
+[pdes.elliptic_adr]
+forcing_basis = [4, 32]
+diffusivity = [0.5, 2.0]
+advection = [-0.25, 0.25]   # independently sampled constant x/y components
+reaction = [0.0, 1.0]
+
+[pdes.heat]
+initial_basis = [4, 32]
+forcing_basis = [0, 8]
+diffusivity = [0.05, 0.5]
+forcing_frequency = [0.0, 1.0] # f(t,x)=f(x)*cos(2*pi*frequency*t); 0 gives steady forcing
+
+[pdes.reaction_diffusion]
+initial_basis = [4, 32]
+forcing_basis = [0, 8]
+diffusivity = [0.05, 0.5]
+reaction = [0.0, 1.0]
+
+[pdes.wave]
+displacement_basis = [4, 32]
+velocity_basis = [4, 16]
+forcing_basis = [0, 8]
+wave_speed = [0.5, 2.0]
+
+[pdes.damped_wave]
+displacement_basis = [4, 32]
+velocity_basis = [4, 16]
+forcing_basis = [0, 8]
+wave_speed = [0.5, 2.0]
+damping = [0.0, 1.0]
+
+[pdes.semilinear]
+forcing_basis = [4, 32]
+beta = [0.1, 2.0]
+
+[pdes.p_laplacian]
+forcing_basis = [4, 32]
+p = [2.0, 4.0]
+
+[pdes.eikonal]
+speed = [0.5, 2.0] # constant per case; no artificial source basis
+
+[geometries.rectangle]
+aspect_ratio = [0.6, 1.8]
+[geometries.ellipse]
+axis_ratio = [0.5, 0.95]
+[geometries.triangle]
+apex = [0.3, 0.7]
+[geometries.trapezoid]
+top_ratio = [0.4, 0.9]
+[geometries.star]
+points = [4, 7]
+inner_ratio = [0.4, 0.65]
+[geometries.cross]
+arm_width = [0.3, 0.5]
+[geometries.dumbbell]
+neck_width = [0.2, 0.4]
+[geometries.annulus]
+inner_ratio = [0.25, 0.5]
+[geometries.hole]
+hole_radius = [0.08, 0.16]
+[geometries.two_holes]
+hole_radius = [0.07, 0.13]
+[geometries.polygon]
+sides = [5, 8]
+
+[conditioning]
+hybrid_known_source_fraction = [0.02, 0.20]
+hybrid_known_initial_fraction = [0.02, 0.20]
+hybrid_known_coefficient_fraction = [0.02, 0.20]
+
+[numerics]
+# Existing --resolution/--frames/--dt override these when explicitly supplied.
+resolution = 12
+frames = 21
+dt = 0.002
+newton_iterations = 80
+newton_tolerance = 1e-9
+p_regularization = 0.0001 # solves -(div((epsilon^2+|grad u|^2)^((p-2)/2)*grad u))=f

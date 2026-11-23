@@ -1,0 +1,1827 @@
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple train \
+  --data data/g1_test \
+  --model A \
+  --size m \
+  --modes forward,inverse,hybrid \
+  --loss field=1,aux=0.1 \
+  --updates 3000 \
+  --batch 4 \
+  --queries 4096 \
+  --device auto \
+  --run runs/a_test3k
+aux: omitted; this dataset has no T2 scalar-parameter targets
+A-Geo m: 6,478,339 parameters; {'width': 256, 'layers': 7, 'heads': 8, 'memory': 24}
+device=mps; 3072 train, 384 validation cases; output scales=[0.17816505847495698, 0.01]
+update 1/3000: field=1.2477, validation=1.281, total=1.2477
+update 10/3000: field=1.4389, validation=0.81114, total=1.4389
+update 20/3000: field=1.0976, validation=0.7309, total=1.0976
+update 30/3000: field=0.29016, validation=0.49131, total=0.29016
+update 40/3000: field=0.11673, validation=0.309, total=0.11673
+update 50/3000: field=0.30171, validation=0.29161, total=0.30171
+update 60/3000: field=0.13404, validation=0.2891, total=0.13404
+update 70/3000: field=0.25812, validation=0.22462, total=0.25812
+update 80/3000: field=0.33159, validation=0.18511, total=0.33159
+update 90/3000: field=0.17101, validation=0.16109, total=0.17101
+update 100/3000: field=0.27864, validation=0.21056, total=0.27864
+update 110/3000: field=0.31649, validation=0.14248, total=0.31649
+update 120/3000: field=0.24586, validation=0.15854, total=0.24586
+update 130/3000: field=0.35008, validation=0.14929, total=0.35008
+update 140/3000: field=0.1879, validation=0.11658, total=0.1879
+update 150/3000: field=0.11634, validation=0.15411, total=0.11634
+update 160/3000: field=0.091789, validation=0.14873, total=0.091789
+update 170/3000: field=0.082328, validation=0.097892, total=0.082328
+update 180/3000: field=0.80125, validation=0.10709, total=0.80125
+update 190/3000: field=0.071324, validation=0.10738, total=0.071324
+update 200/3000: field=0.14641, validation=0.097169, total=0.14641
+update 210/3000: field=0.10374, validation=0.12149, total=0.10374
+update 220/3000: field=0.062813, validation=0.11531, total=0.062813
+update 230/3000: field=0.15638, validation=0.10898, total=0.15638
+update 240/3000: field=0.07832, validation=0.091802, total=0.07832
+update 250/3000: field=0.038103, validation=0.091347, total=0.038103
+update 260/3000: field=0.024183, validation=0.092677, total=0.024183
+update 270/3000: field=0.053756, validation=0.081831, total=0.053756
+update 280/3000: field=0.11516, validation=0.11181, total=0.11516
+update 290/3000: field=0.062582, validation=0.097622, total=0.062582
+update 300/3000: field=0.1037, validation=0.082366, total=0.1037
+update 310/3000: field=0.10591, validation=0.076645, total=0.10591
+update 320/3000: field=0.17189, validation=0.11681, total=0.17189
+update 330/3000: field=0.15983, validation=0.078322, total=0.15983
+update 340/3000: field=0.050545, validation=0.09618, total=0.050545
+update 350/3000: field=0.12685, validation=0.095039, total=0.12685
+update 360/3000: field=0.046447, validation=0.10605, total=0.046447
+update 370/3000: field=0.05278, validation=0.075356, total=0.05278
+update 380/3000: field=0.10713, validation=0.066181, total=0.10713
+update 390/3000: field=0.17285, validation=0.064662, total=0.17285
+update 400/3000: field=0.027663, validation=0.091759, total=0.027663
+update 410/3000: field=0.054608, validation=0.062623, total=0.054608
+update 420/3000: field=0.11719, validation=0.11927, total=0.11719
+update 430/3000: field=0.11968, validation=0.12805, total=0.11968
+update 440/3000: field=0.1771, validation=0.11906, total=0.1771
+update 450/3000: field=0.099138, validation=0.082922, total=0.099138
+update 460/3000: field=0.11665, validation=0.20105, total=0.11665
+update 470/3000: field=0.12597, validation=0.079904, total=0.12597
+update 480/3000: field=0.3035, validation=0.1505, total=0.3035
+update 490/3000: field=0.081283, validation=0.10244, total=0.081283
+update 500/3000: field=0.033585, validation=0.10083, total=0.033585
+update 510/3000: field=0.066314, validation=0.065307, total=0.066314
+update 520/3000: field=0.18443, validation=0.12538, total=0.18443
+update 530/3000: field=0.27729, validation=0.17427, total=0.27729
+update 540/3000: field=0.15638, validation=0.11773, total=0.15638
+update 550/3000: field=0.063924, validation=0.070356, total=0.063924
+update 560/3000: field=0.07092, validation=0.074575, total=0.07092
+update 570/3000: field=0.13019, validation=0.069198, total=0.13019
+update 580/3000: field=0.1818, validation=0.0972, total=0.1818
+update 590/3000: field=0.090122, validation=0.081363, total=0.090122
+update 600/3000: field=0.15348, validation=0.065446, total=0.15348
+update 610/3000: field=0.078076, validation=0.070651, total=0.078076
+update 620/3000: field=0.11871, validation=0.092263, total=0.11871
+update 630/3000: field=0.03488, validation=0.061873, total=0.03488
+update 640/3000: field=0.027149, validation=0.097031, total=0.027149
+update 650/3000: field=0.10146, validation=0.05806, total=0.10146
+update 660/3000: field=0.026104, validation=0.13997, total=0.026104
+update 670/3000: field=0.28381, validation=0.079968, total=0.28381
+update 680/3000: field=0.048929, validation=0.068438, total=0.048929
+update 690/3000: field=0.055635, validation=0.05074, total=0.055635
+update 700/3000: field=0.028307, validation=0.052807, total=0.028307
+update 710/3000: field=0.044549, validation=0.068493, total=0.044549
+update 720/3000: field=0.096621, validation=0.060568, total=0.096621
+update 730/3000: field=0.11907, validation=0.077875, total=0.11907
+update 740/3000: field=0.064607, validation=0.083048, total=0.064607
+update 750/3000: field=0.08531, validation=0.090197, total=0.08531
+update 760/3000: field=0.018695, validation=0.080669, total=0.018695
+update 770/3000: field=0.074674, validation=0.083721, total=0.074674
+update 780/3000: field=0.075981, validation=0.071281, total=0.075981
+update 790/3000: field=0.015209, validation=0.049645, total=0.015209
+update 800/3000: field=0.019851, validation=0.048773, total=0.019851
+update 810/3000: field=0.1638, validation=0.054245, total=0.1638
+update 820/3000: field=0.018495, validation=0.047057, total=0.018495
+update 830/3000: field=0.079527, validation=0.04471, total=0.079527
+update 840/3000: field=0.051171, validation=0.048716, total=0.051171
+update 850/3000: field=0.042037, validation=0.040049, total=0.042037
+update 860/3000: field=0.05613, validation=0.043397, total=0.05613
+update 870/3000: field=0.060769, validation=0.053798, total=0.060769
+update 880/3000: field=0.0329, validation=0.041445, total=0.0329
+update 890/3000: field=0.69671, validation=0.048931, total=0.69671
+update 900/3000: field=0.04968, validation=0.05585, total=0.04968
+update 910/3000: field=0.02607, validation=0.05292, total=0.02607
+update 920/3000: field=0.069271, validation=0.052319, total=0.069271
+update 930/3000: field=0.055191, validation=0.066636, total=0.055191
+update 940/3000: field=0.034461, validation=0.046604, total=0.034461
+update 950/3000: field=0.064053, validation=0.058467, total=0.064053
+update 960/3000: field=0.11207, validation=0.055764, total=0.11207
+update 970/3000: field=0.034724, validation=0.052336, total=0.034724
+update 980/3000: field=0.093031, validation=0.048125, total=0.093031
+update 990/3000: field=0.1561, validation=0.054825, total=0.1561
+update 1000/3000: field=0.01036, validation=0.04586, total=0.01036
+update 1010/3000: field=0.049351, validation=0.05696, total=0.049351
+update 1020/3000: field=0.02311, validation=0.04777, total=0.02311
+update 1030/3000: field=0.04067, validation=0.066113, total=0.04067
+update 1040/3000: field=0.017652, validation=0.045249, total=0.017652
+update 1050/3000: field=0.15105, validation=0.049119, total=0.15105
+update 1060/3000: field=0.099324, validation=0.069544, total=0.099324
+update 1070/3000: field=0.034665, validation=0.038814, total=0.034665
+update 1080/3000: field=0.06848, validation=0.037063, total=0.06848
+update 1090/3000: field=0.057515, validation=0.058134, total=0.057515
+update 1100/3000: field=0.10587, validation=0.048604, total=0.10587
+update 1110/3000: field=0.061915, validation=0.075921, total=0.061915
+update 1120/3000: field=0.030527, validation=0.070867, total=0.030527
+update 1130/3000: field=0.076858, validation=0.054873, total=0.076858
+update 1140/3000: field=0.055121, validation=0.036801, total=0.055121
+update 1150/3000: field=0.027314, validation=0.033559, total=0.027314
+update 1160/3000: field=0.14393, validation=0.051104, total=0.14393
+update 1170/3000: field=0.06154, validation=0.053053, total=0.06154
+update 1180/3000: field=0.13135, validation=0.035935, total=0.13135
+update 1190/3000: field=0.16148, validation=0.047531, total=0.16148
+update 1200/3000: field=0.047008, validation=0.059989, total=0.047008
+update 1210/3000: field=0.54877, validation=0.032257, total=0.54877
+update 1220/3000: field=0.12243, validation=0.041139, total=0.12243
+update 1230/3000: field=0.09228, validation=0.13336, total=0.09228
+update 1240/3000: field=0.22663, validation=0.078757, total=0.22663
+update 1250/3000: field=0.074059, validation=0.05332, total=0.074059
+update 1260/3000: field=0.056373, validation=0.039434, total=0.056373
+update 1270/3000: field=0.022248, validation=0.044836, total=0.022248
+update 1280/3000: field=0.02768, validation=0.03926, total=0.02768
+update 1290/3000: field=0.035183, validation=0.084499, total=0.035183
+update 1300/3000: field=0.016981, validation=0.034921, total=0.016981
+update 1310/3000: field=0.0511, validation=0.036677, total=0.0511
+update 1320/3000: field=0.080242, validation=0.03222, total=0.080242
+update 1330/3000: field=0.094592, validation=0.04762, total=0.094592
+update 1340/3000: field=0.062339, validation=0.0543, total=0.062339
+update 1350/3000: field=0.041149, validation=0.048951, total=0.041149
+update 1360/3000: field=1.0494, validation=0.046606, total=1.0494
+update 1370/3000: field=0.036323, validation=0.033635, total=0.036323
+update 1380/3000: field=0.074441, validation=0.038516, total=0.074441
+update 1390/3000: field=0.02474, validation=0.034694, total=0.02474
+update 1400/3000: field=0.020744, validation=0.068353, total=0.020744
+update 1410/3000: field=0.030635, validation=0.041477, total=0.030635
+update 1420/3000: field=0.014507, validation=0.03393, total=0.014507
+update 1430/3000: field=0.03251, validation=0.064309, total=0.03251
+update 1440/3000: field=0.03816, validation=0.036738, total=0.03816
+update 1450/3000: field=0.087647, validation=0.036883, total=0.087647
+update 1460/3000: field=0.037401, validation=0.039173, total=0.037401
+update 1470/3000: field=0.058819, validation=0.091456, total=0.058819
+update 1480/3000: field=0.020838, validation=0.037369, total=0.020838
+update 1490/3000: field=0.031516, validation=0.034257, total=0.031516
+update 1500/3000: field=0.073961, validation=0.045311, total=0.073961
+update 1510/3000: field=0.052233, validation=0.04348, total=0.052233
+update 1520/3000: field=0.089834, validation=0.056126, total=0.089834
+update 1530/3000: field=0.077879, validation=0.051037, total=0.077879
+update 1540/3000: field=0.053239, validation=0.05188, total=0.053239
+update 1550/3000: field=0.021783, validation=0.041215, total=0.021783
+update 1560/3000: field=0.032084, validation=0.055282, total=0.032084
+update 1570/3000: field=0.24819, validation=0.035585, total=0.24819
+update 1580/3000: field=0.12565, validation=0.037741, total=0.12565
+update 1590/3000: field=0.077345, validation=0.042081, total=0.077345
+update 1600/3000: field=0.05735, validation=0.038837, total=0.05735
+update 1610/3000: field=0.047267, validation=0.034046, total=0.047267
+update 1620/3000: field=0.088815, validation=0.043402, total=0.088815
+update 1630/3000: field=0.079463, validation=0.046228, total=0.079463
+update 1640/3000: field=0.41977, validation=0.055962, total=0.41977
+update 1650/3000: field=0.049811, validation=0.091405, total=0.049811
+update 1660/3000: field=0.095699, validation=0.079632, total=0.095699
+update 1670/3000: field=0.029275, validation=0.037084, total=0.029275
+update 1680/3000: field=0.061945, validation=0.052785, total=0.061945
+update 1690/3000: field=0.12287, validation=0.031191, total=0.12287
+update 1700/3000: field=0.075655, validation=0.046623, total=0.075655
+update 1710/3000: field=0.080817, validation=0.043243, total=0.080817
+update 1720/3000: field=0.1178, validation=0.042762, total=0.1178
+update 1730/3000: field=0.033739, validation=0.038877, total=0.033739
+update 1740/3000: field=0.035079, validation=0.046635, total=0.035079
+update 1750/3000: field=0.058573, validation=0.035085, total=0.058573
+update 1760/3000: field=0.03883, validation=0.029417, total=0.03883
+update 1770/3000: field=0.027495, validation=0.029178, total=0.027495
+update 1780/3000: field=0.050414, validation=0.035336, total=0.050414
+update 1790/3000: field=0.10969, validation=0.062504, total=0.10969
+update 1800/3000: field=0.032016, validation=0.070795, total=0.032016
+update 1810/3000: field=0.039005, validation=0.030366, total=0.039005
+update 1820/3000: field=0.033957, validation=0.046576, total=0.033957
+update 1830/3000: field=0.03685, validation=0.038401, total=0.03685
+update 1840/3000: field=0.059555, validation=0.036391, total=0.059555
+update 1850/3000: field=0.026091, validation=0.0369, total=0.026091
+update 1860/3000: field=0.013522, validation=0.07704, total=0.013522
+update 1870/3000: field=0.038841, validation=0.044338, total=0.038841
+update 1880/3000: field=0.11706, validation=0.033658, total=0.11706
+update 1890/3000: field=0.030424, validation=0.04872, total=0.030424
+update 1900/3000: field=0.078573, validation=0.037833, total=0.078573
+update 1910/3000: field=0.090412, validation=0.032875, total=0.090412
+update 1920/3000: field=0.055166, validation=0.034344, total=0.055166
+update 1930/3000: field=0.025587, validation=0.031639, total=0.025587
+update 1940/3000: field=0.0515, validation=0.04855, total=0.0515
+update 1950/3000: field=0.086215, validation=0.049435, total=0.086215
+update 1960/3000: field=0.027485, validation=0.039883, total=0.027485
+update 1970/3000: field=0.22967, validation=0.054199, total=0.22967
+update 1980/3000: field=0.069828, validation=0.065911, total=0.069828
+update 1990/3000: field=0.047851, validation=0.05678, total=0.047851
+update 2000/3000: field=0.028599, validation=0.047135, total=0.028599
+update 2010/3000: field=0.025858, validation=0.034026, total=0.025858
+update 2020/3000: field=0.032248, validation=0.029832, total=0.032248
+update 2030/3000: field=0.25182, validation=0.026374, total=0.25182
+update 2040/3000: field=0.021865, validation=0.033279, total=0.021865
+update 2050/3000: field=0.12029, validation=0.038933, total=0.12029
+update 2060/3000: field=0.052028, validation=0.06633, total=0.052028
+update 2070/3000: field=0.090278, validation=0.032887, total=0.090278
+update 2080/3000: field=0.030223, validation=0.042249, total=0.030223
+update 2090/3000: field=0.060003, validation=0.064017, total=0.060003
+update 2100/3000: field=0.056145, validation=0.038387, total=0.056145
+update 2110/3000: field=0.044087, validation=0.035196, total=0.044087
+update 2120/3000: field=0.040765, validation=0.027642, total=0.040765
+update 2130/3000: field=0.053979, validation=0.028419, total=0.053979
+update 2140/3000: field=0.039002, validation=0.024859, total=0.039002
+update 2150/3000: field=0.041957, validation=0.038591, total=0.041957
+update 2160/3000: field=0.068138, validation=0.03059, total=0.068138
+update 2170/3000: field=0.029276, validation=0.031774, total=0.029276
+update 2180/3000: field=0.51499, validation=0.051269, total=0.51499
+update 2190/3000: field=0.14001, validation=0.060454, total=0.14001
+update 2200/3000: field=0.099201, validation=0.1346, total=0.099201
+update 2210/3000: field=0.11558, validation=0.079708, total=0.11558
+update 2220/3000: field=0.11542, validation=0.091357, total=0.11542
+update 2230/3000: field=0.059702, validation=0.073523, total=0.059702
+update 2240/3000: field=0.16752, validation=0.063763, total=0.16752
+update 2250/3000: field=0.038399, validation=0.048794, total=0.038399
+update 2260/3000: field=0.077002, validation=0.063799, total=0.077002
+update 2270/3000: field=0.089834, validation=0.03648, total=0.089834
+update 2280/3000: field=0.10123, validation=0.039634, total=0.10123
+update 2290/3000: field=0.090797, validation=0.043242, total=0.090797
+update 2300/3000: field=0.057975, validation=0.048096, total=0.057975
+update 2310/3000: field=0.034355, validation=0.032199, total=0.034355
+update 2320/3000: field=0.044716, validation=0.039728, total=0.044716
+update 2330/3000: field=0.07364, validation=0.054837, total=0.07364
+update 2340/3000: field=0.01689, validation=0.041152, total=0.01689
+update 2350/3000: field=0.047494, validation=0.040071, total=0.047494
+update 2360/3000: field=0.031597, validation=0.044516, total=0.031597
+update 2370/3000: field=0.105, validation=0.035321, total=0.105
+update 2380/3000: field=0.010119, validation=0.026477, total=0.010119
+update 2390/3000: field=0.020097, validation=0.024525, total=0.020097
+update 2400/3000: field=0.066917, validation=0.023599, total=0.066917
+update 2410/3000: field=0.023317, validation=0.043282, total=0.023317
+update 2420/3000: field=0.053154, validation=0.039508, total=0.053154
+update 2430/3000: field=0.069736, validation=0.037032, total=0.069736
+update 2440/3000: field=0.11091, validation=0.025869, total=0.11091
+update 2450/3000: field=0.060645, validation=0.034811, total=0.060645
+update 2460/3000: field=0.2688, validation=0.047398, total=0.2688
+update 2470/3000: field=0.066368, validation=0.034837, total=0.066368
+update 2480/3000: field=0.10874, validation=0.028054, total=0.10874
+update 2490/3000: field=0.021571, validation=0.028514, total=0.021571
+update 2500/3000: field=0.050698, validation=0.039822, total=0.050698
+update 2510/3000: field=0.021562, validation=0.031495, total=0.021562
+update 2520/3000: field=0.095444, validation=0.023746, total=0.095444
+update 2530/3000: field=0.01538, validation=0.024393, total=0.01538
+update 2540/3000: field=0.024784, validation=0.024285, total=0.024784
+update 2550/3000: field=0.074964, validation=0.027601, total=0.074964
+update 2560/3000: field=0.15493, validation=0.05422, total=0.15493
+update 2570/3000: field=0.058479, validation=0.083407, total=0.058479
+update 2580/3000: field=0.051065, validation=0.035482, total=0.051065
+update 2590/3000: field=0.027706, validation=0.035121, total=0.027706
+update 2600/3000: field=0.029096, validation=0.048529, total=0.029096
+update 2610/3000: field=0.043739, validation=0.037236, total=0.043739
+update 2620/3000: field=0.068826, validation=0.027696, total=0.068826
+update 2630/3000: field=0.074101, validation=0.045009, total=0.074101
+update 2640/3000: field=0.025391, validation=0.026265, total=0.025391
+update 2650/3000: field=0.026867, validation=0.031357, total=0.026867
+update 2660/3000: field=0.12654, validation=0.039148, total=0.12654
+update 2670/3000: field=0.019067, validation=0.02752, total=0.019067
+update 2680/3000: field=0.048372, validation=0.025833, total=0.048372
+update 2690/3000: field=0.061483, validation=0.026531, total=0.061483
+update 2700/3000: field=0.017476, validation=0.025878, total=0.017476
+update 2710/3000: field=0.072854, validation=0.023587, total=0.072854
+update 2720/3000: field=0.0276, validation=0.020169, total=0.0276
+update 2730/3000: field=0.24285, validation=0.022973, total=0.24285
+update 2740/3000: field=0.041878, validation=0.027905, total=0.041878
+update 2750/3000: field=0.0255, validation=0.02872, total=0.0255
+update 2760/3000: field=0.05596, validation=0.026913, total=0.05596
+update 2770/3000: field=0.062901, validation=0.036207, total=0.062901
+update 2780/3000: field=0.029129, validation=0.027675, total=0.029129
+update 2790/3000: field=0.019673, validation=0.028815, total=0.019673
+update 2800/3000: field=0.025026, validation=0.023658, total=0.025026
+update 2810/3000: field=0.064536, validation=0.024377, total=0.064536
+update 2820/3000: field=0.022833, validation=0.021581, total=0.022833
+update 2830/3000: field=0.042769, validation=0.027051, total=0.042769
+update 2840/3000: field=0.0069678, validation=0.024347, total=0.0069678
+update 2850/3000: field=0.14999, validation=0.03484, total=0.14999
+update 2860/3000: field=0.18446, validation=0.027591, total=0.18446
+update 2870/3000: field=0.049576, validation=0.026324, total=0.049576
+update 2880/3000: field=0.065626, validation=0.022369, total=0.065626
+update 2890/3000: field=0.077964, validation=0.029399, total=0.077964
+update 2900/3000: field=0.040416, validation=0.027574, total=0.040416
+update 2910/3000: field=0.037417, validation=0.028437, total=0.037417
+update 2920/3000: field=0.023803, validation=0.022138, total=0.023803
+update 2930/3000: field=0.0082563, validation=0.027281, total=0.0082563
+update 2940/3000: field=0.27392, validation=0.026055, total=0.27392
+update 2950/3000: field=0.044986, validation=0.037463, total=0.044986
+update 2960/3000: field=0.071967, validation=0.031771, total=0.071967
+update 2970/3000: field=0.2424, validation=0.038004, total=0.2424
+update 2980/3000: field=0.072027, validation=0.076328, total=0.072027
+update 2990/3000: field=0.027771, validation=0.048576, total=0.027771
+update 3000/3000: field=0.069768, validation=0.034637, total=0.069768
+training finished in 11822.10s; best validation field=0.020169
+
+
+
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple train \
+  --data data/g1_test \
+  --model C \
+  --size m \
+  --modes forward,inverse,hybrid \
+  --loss field=1,aux=0.1 \
+  --updates 3000 \
+  --batch 4 \
+  --queries 4096 \
+  --device auto \
+  --run runs/c_test3k
+aux: omitted; this dataset has no T2 scalar-parameter targets
+C-Geo m: 5,739,267 parameters; {'width': 256, 'layers': 7, 'heads': 8, 'memory': 24}
+device=mps; 3072 train, 384 validation cases; output scales=[0.17816505847495698, 0.01]
+update 1/3000: field=1.389, validation=1.0775, total=1.389
+update 10/3000: field=1.7515, validation=1.0078, total=1.7515
+update 20/3000: field=1.125, validation=0.71057, total=1.125
+update 30/3000: field=0.26368, validation=0.30203, total=0.26368
+update 40/3000: field=0.13028, validation=0.23386, total=0.13028
+update 50/3000: field=0.30728, validation=0.21185, total=0.30728
+update 60/3000: field=0.097619, validation=0.24544, total=0.097619
+update 70/3000: field=0.21815, validation=0.17274, total=0.21815
+update 80/3000: field=0.25077, validation=0.14504, total=0.25077
+update 90/3000: field=0.11981, validation=0.13203, total=0.11981
+update 100/3000: field=0.28745, validation=0.16935, total=0.28745
+update 110/3000: field=0.21681, validation=0.18103, total=0.21681
+update 120/3000: field=0.24001, validation=0.19057, total=0.24001
+update 130/3000: field=0.16404, validation=0.11574, total=0.16404
+update 140/3000: field=0.17905, validation=0.12425, total=0.17905
+update 150/3000: field=0.072535, validation=0.097489, total=0.072535
+update 160/3000: field=0.10149, validation=0.10596, total=0.10149
+update 170/3000: field=0.070019, validation=0.087369, total=0.070019
+update 180/3000: field=0.51442, validation=0.13188, total=0.51442
+update 190/3000: field=0.063668, validation=0.097398, total=0.063668
+update 200/3000: field=0.11818, validation=0.10474, total=0.11818
+update 210/3000: field=0.099269, validation=0.11769, total=0.099269
+update 220/3000: field=0.035058, validation=0.11618, total=0.035058
+update 230/3000: field=0.1095, validation=0.10959, total=0.1095
+update 240/3000: field=0.089512, validation=0.10896, total=0.089512
+update 250/3000: field=0.040043, validation=0.096448, total=0.040043
+update 260/3000: field=0.031259, validation=0.080441, total=0.031259
+update 270/3000: field=0.040681, validation=0.081567, total=0.040681
+update 280/3000: field=0.17511, validation=0.10341, total=0.17511
+update 290/3000: field=0.10802, validation=0.08191, total=0.10802
+update 300/3000: field=0.14502, validation=0.07851, total=0.14502
+update 310/3000: field=0.10179, validation=0.07532, total=0.10179
+update 320/3000: field=0.13017, validation=0.085648, total=0.13017
+update 330/3000: field=0.14902, validation=0.11397, total=0.14902
+update 340/3000: field=0.066431, validation=0.083842, total=0.066431
+update 350/3000: field=0.16119, validation=0.12538, total=0.16119
+update 360/3000: field=0.044929, validation=0.096857, total=0.044929
+update 370/3000: field=0.06438, validation=0.11372, total=0.06438
+update 380/3000: field=0.13316, validation=0.08868, total=0.13316
+update 390/3000: field=0.19919, validation=0.074817, total=0.19919
+update 400/3000: field=0.038817, validation=0.077091, total=0.038817
+update 410/3000: field=0.10729, validation=0.10061, total=0.10729
+update 420/3000: field=0.076, validation=0.10643, total=0.076
+update 430/3000: field=0.042027, validation=0.089945, total=0.042027
+update 440/3000: field=0.12543, validation=0.078543, total=0.12543
+update 450/3000: field=0.030755, validation=0.069676, total=0.030755
+update 460/3000: field=0.061933, validation=0.1204, total=0.061933
+update 470/3000: field=0.13196, validation=0.068088, total=0.13196
+update 480/3000: field=0.48929, validation=0.12913, total=0.48929
+update 490/3000: field=0.034273, validation=0.11718, total=0.034273
+update 500/3000: field=0.031576, validation=0.10336, total=0.031576
+update 510/3000: field=0.074787, validation=0.07755, total=0.074787
+update 520/3000: field=0.30732, validation=0.06676, total=0.30732
+update 530/3000: field=0.091238, validation=0.059145, total=0.091238
+update 540/3000: field=0.068853, validation=0.087133, total=0.068853
+update 550/3000: field=0.048842, validation=0.058858, total=0.048842
+update 560/3000: field=0.045699, validation=0.067966, total=0.045699
+update 570/3000: field=0.10979, validation=0.055777, total=0.10979
+update 580/3000: field=0.35944, validation=0.061669, total=0.35944
+update 590/3000: field=0.067531, validation=0.068692, total=0.067531
+update 600/3000: field=0.11875, validation=0.064351, total=0.11875
+update 610/3000: field=0.041539, validation=0.0588, total=0.041539
+update 620/3000: field=0.074273, validation=0.069423, total=0.074273
+update 630/3000: field=0.064313, validation=0.062547, total=0.064313
+update 640/3000: field=0.023989, validation=0.079014, total=0.023989
+update 650/3000: field=0.0801, validation=0.055476, total=0.0801
+update 660/3000: field=0.025447, validation=0.10004, total=0.025447
+update 670/3000: field=0.37192, validation=0.069845, total=0.37192
+update 680/3000: field=0.072492, validation=0.066701, total=0.072492
+update 690/3000: field=0.1104, validation=0.084215, total=0.1104
+update 700/3000: field=0.046485, validation=0.07028, total=0.046485
+update 710/3000: field=0.055328, validation=0.066692, total=0.055328
+update 720/3000: field=0.054753, validation=0.077991, total=0.054753
+update 730/3000: field=0.069378, validation=0.091265, total=0.069378
+update 740/3000: field=0.10071, validation=0.13012, total=0.10071
+update 750/3000: field=0.068424, validation=0.064421, total=0.068424
+update 760/3000: field=0.040435, validation=0.060981, total=0.040435
+update 770/3000: field=0.073792, validation=0.047744, total=0.073792
+update 780/3000: field=0.094344, validation=0.073833, total=0.094344
+update 790/3000: field=0.020923, validation=0.043583, total=0.020923
+update 800/3000: field=0.019114, validation=0.041006, total=0.019114
+update 810/3000: field=0.079882, validation=0.047788, total=0.079882
+update 820/3000: field=0.024748, validation=0.047655, total=0.024748
+update 830/3000: field=0.084014, validation=0.04706, total=0.084014
+update 840/3000: field=0.044768, validation=0.045326, total=0.044768
+update 850/3000: field=0.054479, validation=0.055204, total=0.054479
+update 860/3000: field=0.032083, validation=0.058121, total=0.032083
+update 870/3000: field=0.091605, validation=0.06825, total=0.091605
+update 880/3000: field=0.1407, validation=0.11088, total=0.1407
+update 890/3000: field=1.3493, validation=0.087033, total=1.3493
+update 900/3000: field=0.18352, validation=0.13735, total=0.18352
+update 910/3000: field=0.014849, validation=0.059523, total=0.014849
+update 920/3000: field=0.15302, validation=0.052555, total=0.15302
+update 930/3000: field=0.026934, validation=0.063936, total=0.026934
+update 940/3000: field=0.062474, validation=0.042138, total=0.062474
+update 950/3000: field=0.11193, validation=0.040454, total=0.11193
+update 960/3000: field=0.062288, validation=0.055821, total=0.062288
+update 970/3000: field=0.014591, validation=0.04553, total=0.014591
+update 980/3000: field=0.052638, validation=0.035842, total=0.052638
+update 990/3000: field=0.17147, validation=0.067288, total=0.17147
+update 1000/3000: field=0.0095088, validation=0.087689, total=0.0095088
+update 1010/3000: field=0.094309, validation=0.043098, total=0.094309
+update 1020/3000: field=0.042229, validation=0.051341, total=0.042229
+update 1030/3000: field=0.036843, validation=0.078258, total=0.036843
+update 1040/3000: field=0.023317, validation=0.074945, total=0.023317
+update 1050/3000: field=0.094867, validation=0.053377, total=0.094867
+update 1060/3000: field=0.089879, validation=0.059784, total=0.089879
+update 1070/3000: field=0.040723, validation=0.048479, total=0.040723
+update 1080/3000: field=0.091245, validation=0.04056, total=0.091245
+update 1090/3000: field=0.17952, validation=0.06877, total=0.17952
+update 1100/3000: field=0.047834, validation=0.055737, total=0.047834
+update 1110/3000: field=0.057793, validation=0.13623, total=0.057793
+update 1120/3000: field=0.058313, validation=0.088097, total=0.058313
+update 1130/3000: field=0.095269, validation=0.066644, total=0.095269
+update 1140/3000: field=0.14015, validation=0.045578, total=0.14015
+update 1150/3000: field=0.050914, validation=0.046497, total=0.050914
+update 1160/3000: field=0.21515, validation=0.068667, total=0.21515
+update 1170/3000: field=0.017054, validation=0.053421, total=0.017054
+update 1180/3000: field=0.15888, validation=0.046772, total=0.15888
+update 1190/3000: field=0.57035, validation=0.079991, total=0.57035
+update 1200/3000: field=0.052288, validation=0.077702, total=0.052288
+update 1210/3000: field=0.70102, validation=0.048605, total=0.70102
+update 1220/3000: field=0.089569, validation=0.043468, total=0.089569
+update 1230/3000: field=0.04155, validation=0.067286, total=0.04155
+update 1240/3000: field=0.24739, validation=0.119, total=0.24739
+update 1250/3000: field=0.061614, validation=0.075728, total=0.061614
+update 1260/3000: field=0.066951, validation=0.049936, total=0.066951
+update 1270/3000: field=0.036531, validation=0.046918, total=0.036531
+update 1280/3000: field=0.038354, validation=0.042244, total=0.038354
+update 1290/3000: field=0.025131, validation=0.040553, total=0.025131
+update 1300/3000: field=0.024582, validation=0.046162, total=0.024582
+update 1310/3000: field=0.045181, validation=0.042494, total=0.045181
+update 1320/3000: field=0.073543, validation=0.041144, total=0.073543
+update 1330/3000: field=0.084412, validation=0.071715, total=0.084412
+update 1340/3000: field=0.057683, validation=0.060923, total=0.057683
+update 1350/3000: field=0.063496, validation=0.040604, total=0.063496
+update 1360/3000: field=1.6879, validation=0.079464, total=1.6879
+update 1370/3000: field=0.050889, validation=0.060073, total=0.050889
+update 1380/3000: field=0.070418, validation=0.051683, total=0.070418
+update 1390/3000: field=0.035122, validation=0.041626, total=0.035122
+update 1400/3000: field=0.034964, validation=0.11705, total=0.034964
+update 1410/3000: field=0.027753, validation=0.050158, total=0.027753
+update 1420/3000: field=0.05506, validation=0.063164, total=0.05506
+update 1430/3000: field=0.044412, validation=0.083506, total=0.044412
+update 1440/3000: field=0.045808, validation=0.050217, total=0.045808
+update 1450/3000: field=0.060535, validation=0.040953, total=0.060535
+update 1460/3000: field=0.070647, validation=0.046655, total=0.070647
+update 1470/3000: field=0.055928, validation=0.11372, total=0.055928
+update 1480/3000: field=0.029418, validation=0.061074, total=0.029418
+update 1490/3000: field=0.032433, validation=0.049891, total=0.032433
+update 1500/3000: field=0.078605, validation=0.048659, total=0.078605
+update 1510/3000: field=0.065652, validation=0.06386, total=0.065652
+update 1520/3000: field=0.19067, validation=0.09395, total=0.19067
+update 1530/3000: field=0.059471, validation=0.086211, total=0.059471
+update 1540/3000: field=0.30929, validation=0.069944, total=0.30929
+update 1550/3000: field=0.018657, validation=0.03984, total=0.018657
+update 1560/3000: field=0.023358, validation=0.05181, total=0.023358
+update 1570/3000: field=0.22228, validation=0.068642, total=0.22228
+update 1580/3000: field=0.1419, validation=0.050764, total=0.1419
+update 1590/3000: field=0.065997, validation=0.037835, total=0.065997
+update 1600/3000: field=0.070815, validation=0.037415, total=0.070815
+update 1610/3000: field=0.05705, validation=0.049385, total=0.05705
+update 1620/3000: field=0.098247, validation=0.045028, total=0.098247
+update 1630/3000: field=0.064206, validation=0.047068, total=0.064206
+update 1640/3000: field=0.46473, validation=0.062896, total=0.46473
+update 1650/3000: field=0.046097, validation=0.036593, total=0.046097
+update 1660/3000: field=0.10443, validation=0.072995, total=0.10443
+update 1670/3000: field=0.027779, validation=0.04259, total=0.027779
+update 1680/3000: field=0.06055, validation=0.047897, total=0.06055
+update 1690/3000: field=0.19306, validation=0.033763, total=0.19306
+update 1700/3000: field=0.039734, validation=0.044472, total=0.039734
+update 1710/3000: field=0.029028, validation=0.046661, total=0.029028
+update 1720/3000: field=0.20193, validation=0.036116, total=0.20193
+update 1730/3000: field=0.04179, validation=0.031849, total=0.04179
+update 1740/3000: field=0.016203, validation=0.031981, total=0.016203
+update 1750/3000: field=0.024824, validation=0.030751, total=0.024824
+update 1760/3000: field=0.047102, validation=0.029933, total=0.047102
+update 1770/3000: field=0.018428, validation=0.028589, total=0.018428
+update 1780/3000: field=0.0369, validation=0.065304, total=0.0369
+update 1790/3000: field=0.072491, validation=0.080822, total=0.072491
+update 1800/3000: field=0.043149, validation=0.047142, total=0.043149
+update 1810/3000: field=0.03097, validation=0.044836, total=0.03097
+update 1820/3000: field=0.067093, validation=0.063944, total=0.067093
+update 1830/3000: field=0.031233, validation=0.047625, total=0.031233
+update 1840/3000: field=0.066329, validation=0.070657, total=0.066329
+update 1850/3000: field=0.062, validation=0.062666, total=0.062
+update 1860/3000: field=0.018066, validation=0.042058, total=0.018066
+update 1870/3000: field=0.065286, validation=0.036808, total=0.065286
+update 1880/3000: field=0.10046, validation=0.028866, total=0.10046
+update 1890/3000: field=0.0308, validation=0.035431, total=0.0308
+update 1900/3000: field=0.08237, validation=0.04191, total=0.08237
+update 1910/3000: field=0.078923, validation=0.04032, total=0.078923
+update 1920/3000: field=0.057964, validation=0.045547, total=0.057964
+update 1930/3000: field=0.027243, validation=0.060942, total=0.027243
+update 1940/3000: field=0.038217, validation=0.053081, total=0.038217
+update 1950/3000: field=0.086458, validation=0.044406, total=0.086458
+update 1960/3000: field=0.019834, validation=0.033002, total=0.019834
+update 1970/3000: field=0.14222, validation=0.038893, total=0.14222
+update 1980/3000: field=0.084408, validation=0.049098, total=0.084408
+update 1990/3000: field=0.077633, validation=0.042289, total=0.077633
+update 2000/3000: field=0.022983, validation=0.038317, total=0.022983
+update 2010/3000: field=0.020722, validation=0.039535, total=0.020722
+update 2020/3000: field=0.034156, validation=0.04038, total=0.034156
+update 2030/3000: field=0.13442, validation=0.034152, total=0.13442
+update 2040/3000: field=0.027148, validation=0.037445, total=0.027148
+update 2050/3000: field=0.12988, validation=0.040318, total=0.12988
+update 2060/3000: field=0.071363, validation=0.066048, total=0.071363
+update 2070/3000: field=0.037821, validation=0.03025, total=0.037821
+update 2080/3000: field=0.072183, validation=0.033642, total=0.072183
+update 2090/3000: field=0.065799, validation=0.066431, total=0.065799
+update 2100/3000: field=0.045131, validation=0.048762, total=0.045131
+update 2110/3000: field=0.028007, validation=0.049082, total=0.028007
+update 2120/3000: field=0.055543, validation=0.027311, total=0.055543
+update 2130/3000: field=0.08376, validation=0.06354, total=0.08376
+update 2140/3000: field=0.047085, validation=0.041952, total=0.047085
+update 2150/3000: field=0.047255, validation=0.047614, total=0.047255
+update 2160/3000: field=0.081834, validation=0.043188, total=0.081834
+update 2170/3000: field=0.059826, validation=0.059445, total=0.059826
+update 2180/3000: field=0.49087, validation=0.061289, total=0.49087
+update 2190/3000: field=0.16866, validation=0.063419, total=0.16866
+update 2200/3000: field=0.047262, validation=0.086269, total=0.047262
+update 2210/3000: field=0.22999, validation=0.049553, total=0.22999
+update 2220/3000: field=0.025548, validation=0.047056, total=0.025548
+update 2230/3000: field=0.017062, validation=0.057624, total=0.017062
+update 2240/3000: field=0.45023, validation=0.085801, total=0.45023
+update 2250/3000: field=0.042816, validation=0.051516, total=0.042816
+update 2260/3000: field=0.053435, validation=0.038189, total=0.053435
+update 2270/3000: field=0.060822, validation=0.028684, total=0.060822
+update 2280/3000: field=0.078817, validation=0.038998, total=0.078817
+update 2290/3000: field=0.070399, validation=0.04286, total=0.070399
+update 2300/3000: field=0.038235, validation=0.036103, total=0.038235
+update 2310/3000: field=0.042867, validation=0.090646, total=0.042867
+update 2320/3000: field=0.081652, validation=0.089071, total=0.081652
+update 2330/3000: field=0.072426, validation=0.099478, total=0.072426
+update 2340/3000: field=0.013027, validation=0.064472, total=0.013027
+update 2350/3000: field=0.0472, validation=0.051567, total=0.0472
+update 2360/3000: field=0.034847, validation=0.041963, total=0.034847
+update 2370/3000: field=0.11566, validation=0.028982, total=0.11566
+update 2380/3000: field=0.0067792, validation=0.034037, total=0.0067792
+update 2390/3000: field=0.027767, validation=0.038384, total=0.027767
+update 2400/3000: field=0.032857, validation=0.03114, total=0.032857
+update 2410/3000: field=0.025784, validation=0.042439, total=0.025784
+update 2420/3000: field=0.069238, validation=0.042187, total=0.069238
+update 2430/3000: field=0.051523, validation=0.039581, total=0.051523
+update 2440/3000: field=0.12832, validation=0.03225, total=0.12832
+update 2450/3000: field=0.064497, validation=0.04532, total=0.064497
+update 2460/3000: field=0.18338, validation=0.036793, total=0.18338
+update 2470/3000: field=0.057301, validation=0.028561, total=0.057301
+update 2480/3000: field=0.10532, validation=0.032434, total=0.10532
+update 2490/3000: field=0.021418, validation=0.044261, total=0.021418
+update 2500/3000: field=0.077174, validation=0.038627, total=0.077174
+update 2510/3000: field=0.040634, validation=0.038847, total=0.040634
+update 2520/3000: field=0.06424, validation=0.037935, total=0.06424
+update 2530/3000: field=0.01582, validation=0.027296, total=0.01582
+update 2540/3000: field=0.035324, validation=0.029416, total=0.035324
+update 2550/3000: field=0.058667, validation=0.029606, total=0.058667
+update 2560/3000: field=0.10757, validation=0.052929, total=0.10757
+update 2570/3000: field=0.043545, validation=0.064394, total=0.043545
+update 2580/3000: field=0.031194, validation=0.034566, total=0.031194
+update 2590/3000: field=0.039415, validation=0.038519, total=0.039415
+update 2600/3000: field=0.042963, validation=0.054287, total=0.042963
+update 2610/3000: field=0.022965, validation=0.030417, total=0.022965
+update 2620/3000: field=0.074457, validation=0.032433, total=0.074457
+update 2630/3000: field=0.11246, validation=0.064187, total=0.11246
+update 2640/3000: field=0.029492, validation=0.034342, total=0.029492
+update 2650/3000: field=0.03497, validation=0.03828, total=0.03497
+update 2660/3000: field=0.14868, validation=0.032068, total=0.14868
+update 2670/3000: field=0.023936, validation=0.029987, total=0.023936
+update 2680/3000: field=0.057641, validation=0.02697, total=0.057641
+update 2690/3000: field=0.07859, validation=0.032482, total=0.07859
+update 2700/3000: field=0.016181, validation=0.032646, total=0.016181
+update 2710/3000: field=0.06542, validation=0.03036, total=0.06542
+update 2720/3000: field=0.028993, validation=0.02364, total=0.028993
+update 2730/3000: field=0.24008, validation=0.023642, total=0.24008
+update 2740/3000: field=0.037627, validation=0.028445, total=0.037627
+update 2750/3000: field=0.026886, validation=0.030938, total=0.026886
+update 2760/3000: field=0.076424, validation=0.036041, total=0.076424
+update 2770/3000: field=0.057679, validation=0.029532, total=0.057679
+update 2780/3000: field=0.032352, validation=0.038436, total=0.032352
+update 2790/3000: field=0.021053, validation=0.037907, total=0.021053
+update 2800/3000: field=0.021175, validation=0.02644, total=0.021175
+update 2810/3000: field=0.057165, validation=0.0322, total=0.057165
+update 2820/3000: field=0.031496, validation=0.030225, total=0.031496
+update 2830/3000: field=0.036358, validation=0.034891, total=0.036358
+update 2840/3000: field=0.0085717, validation=0.031742, total=0.0085717
+update 2850/3000: field=0.10608, validation=0.035837, total=0.10608
+update 2860/3000: field=0.15056, validation=0.029036, total=0.15056
+update 2870/3000: field=0.047225, validation=0.033915, total=0.047225
+update 2880/3000: field=0.06591, validation=0.029259, total=0.06591
+update 2890/3000: field=0.075742, validation=0.028446, total=0.075742
+update 2900/3000: field=0.027556, validation=0.030887, total=0.027556
+update 2910/3000: field=0.049957, validation=0.025607, total=0.049957
+update 2920/3000: field=0.037099, validation=0.022539, total=0.037099
+update 2930/3000: field=0.008369, validation=0.025396, total=0.008369
+update 2940/3000: field=0.38977, validation=0.026886, total=0.38977
+update 2950/3000: field=0.05326, validation=0.049274, total=0.05326
+update 2960/3000: field=0.10079, validation=0.044728, total=0.10079
+update 2970/3000: field=0.2114, validation=0.038842, total=0.2114
+update 2980/3000: field=0.066491, validation=0.051781, total=0.066491
+update 2990/3000: field=0.021694, validation=0.03611, total=0.021694
+update 3000/3000: field=0.10378, validation=0.066108, total=0.10378
+training finished in 6051.35s; best validation field=0.022539
+
+
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple baseline --data data/g1_small --split test \
+  --observations 0,8,16,32,64,128 --out runs/g1_base_test3k
+evaluated test_poisson_square_00000.npz
+evaluated test_poisson_square_00001.npz
+evaluated test_poisson_disk_00000.npz
+evaluated test_poisson_disk_00001.npz
+evaluated test_poisson_lshape_00000.npz
+evaluated test_poisson_lshape_00001.npz
+evaluated test_heat_square_00000.npz
+evaluated test_heat_square_00001.npz
+evaluated test_heat_disk_00000.npz
+evaluated test_heat_disk_00001.npz
+evaluated test_heat_lshape_00000.npz
+evaluated test_heat_lshape_00001.npz
+evaluated test_wave_square_00000.npz
+evaluated test_wave_square_00001.npz
+evaluated test_wave_disk_00000.npz
+evaluated test_wave_disk_00001.npz
+evaluated test_wave_lshape_00000.npz
+evaluated test_wave_lshape_00001.npz
+prior: mean per-case RMSE=0.6074 (432 quantity/case/mode/count records)
+rbf: mean per-case RMSE=1.9523 (432 quantity/case/mode/count records)
+CSV metrics and fields: runs/g1_base_test3k
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple baseline --data data/g1_test --split test \
+  --observations 0,8,16,32,64,128 --out runs/g1_base_test3k
+evaluated test_poisson_square_00000.npz
+evaluated test_poisson_square_00001.npz
+evaluated test_poisson_square_00002.npz
+evaluated test_poisson_square_00003.npz
+evaluated test_poisson_square_00004.npz
+evaluated test_poisson_square_00005.npz
+evaluated test_poisson_square_00006.npz
+evaluated test_poisson_square_00007.npz
+evaluated test_poisson_square_00008.npz
+evaluated test_poisson_square_00009.npz
+evaluated test_poisson_square_00010.npz
+evaluated test_poisson_square_00011.npz
+evaluated test_poisson_square_00012.npz
+evaluated test_poisson_square_00013.npz
+evaluated test_poisson_square_00014.npz
+evaluated test_poisson_square_00015.npz
+evaluated test_poisson_square_00016.npz
+evaluated test_poisson_square_00017.npz
+evaluated test_poisson_square_00018.npz
+evaluated test_poisson_square_00019.npz
+evaluated test_poisson_square_00020.npz
+evaluated test_poisson_square_00021.npz
+evaluated test_poisson_square_00022.npz
+evaluated test_poisson_square_00023.npz
+evaluated test_poisson_square_00024.npz
+evaluated test_poisson_square_00025.npz
+evaluated test_poisson_square_00026.npz
+evaluated test_poisson_square_00027.npz
+evaluated test_poisson_square_00028.npz
+evaluated test_poisson_square_00029.npz
+evaluated test_poisson_square_00030.npz
+evaluated test_poisson_square_00031.npz
+evaluated test_poisson_square_00032.npz
+evaluated test_poisson_square_00033.npz
+evaluated test_poisson_square_00034.npz
+evaluated test_poisson_square_00035.npz
+evaluated test_poisson_square_00036.npz
+evaluated test_poisson_square_00037.npz
+evaluated test_poisson_square_00038.npz
+evaluated test_poisson_square_00039.npz
+evaluated test_poisson_square_00040.npz
+evaluated test_poisson_square_00041.npz
+evaluated test_poisson_square_00042.npz
+evaluated test_poisson_square_00043.npz
+evaluated test_poisson_square_00044.npz
+evaluated test_poisson_square_00045.npz
+evaluated test_poisson_square_00046.npz
+evaluated test_poisson_square_00047.npz
+evaluated test_poisson_square_00048.npz
+evaluated test_poisson_square_00049.npz
+evaluated test_poisson_square_00050.npz
+evaluated test_poisson_square_00051.npz
+evaluated test_poisson_square_00052.npz
+evaluated test_poisson_square_00053.npz
+evaluated test_poisson_square_00054.npz
+evaluated test_poisson_square_00055.npz
+evaluated test_poisson_square_00056.npz
+evaluated test_poisson_square_00057.npz
+evaluated test_poisson_square_00058.npz
+evaluated test_poisson_square_00059.npz
+evaluated test_poisson_square_00060.npz
+evaluated test_poisson_square_00061.npz
+evaluated test_poisson_square_00062.npz
+evaluated test_poisson_square_00063.npz
+evaluated test_poisson_square_00064.npz
+evaluated test_poisson_square_00065.npz
+evaluated test_poisson_square_00066.npz
+evaluated test_poisson_square_00067.npz
+evaluated test_poisson_square_00068.npz
+evaluated test_poisson_square_00069.npz
+evaluated test_poisson_square_00070.npz
+evaluated test_poisson_square_00071.npz
+evaluated test_poisson_square_00072.npz
+evaluated test_poisson_square_00073.npz
+evaluated test_poisson_square_00074.npz
+evaluated test_poisson_square_00075.npz
+evaluated test_poisson_square_00076.npz
+evaluated test_poisson_square_00077.npz
+evaluated test_poisson_square_00078.npz
+evaluated test_poisson_square_00079.npz
+evaluated test_poisson_square_00080.npz
+evaluated test_poisson_square_00081.npz
+evaluated test_poisson_square_00082.npz
+evaluated test_poisson_square_00083.npz
+evaluated test_poisson_square_00084.npz
+evaluated test_poisson_square_00085.npz
+evaluated test_poisson_square_00086.npz
+evaluated test_poisson_square_00087.npz
+evaluated test_poisson_square_00088.npz
+evaluated test_poisson_square_00089.npz
+evaluated test_poisson_square_00090.npz
+evaluated test_poisson_square_00091.npz
+evaluated test_poisson_square_00092.npz
+evaluated test_poisson_square_00093.npz
+evaluated test_poisson_square_00094.npz
+evaluated test_poisson_square_00095.npz
+evaluated test_poisson_square_00096.npz
+evaluated test_poisson_square_00097.npz
+evaluated test_poisson_square_00098.npz
+evaluated test_poisson_square_00099.npz
+evaluated test_poisson_square_00100.npz
+evaluated test_poisson_square_00101.npz
+evaluated test_poisson_square_00102.npz
+evaluated test_poisson_square_00103.npz
+evaluated test_poisson_square_00104.npz
+evaluated test_poisson_square_00105.npz
+evaluated test_poisson_square_00106.npz
+evaluated test_poisson_square_00107.npz
+evaluated test_poisson_square_00108.npz
+evaluated test_poisson_square_00109.npz
+evaluated test_poisson_square_00110.npz
+evaluated test_poisson_square_00111.npz
+evaluated test_poisson_square_00112.npz
+evaluated test_poisson_square_00113.npz
+evaluated test_poisson_square_00114.npz
+evaluated test_poisson_square_00115.npz
+evaluated test_poisson_square_00116.npz
+evaluated test_poisson_square_00117.npz
+evaluated test_poisson_square_00118.npz
+evaluated test_poisson_square_00119.npz
+evaluated test_poisson_square_00120.npz
+evaluated test_poisson_square_00121.npz
+evaluated test_poisson_square_00122.npz
+evaluated test_poisson_square_00123.npz
+evaluated test_poisson_square_00124.npz
+evaluated test_poisson_square_00125.npz
+evaluated test_poisson_square_00126.npz
+evaluated test_poisson_square_00127.npz
+evaluated test_poisson_disk_00000.npz
+evaluated test_poisson_disk_00001.npz
+evaluated test_poisson_disk_00002.npz
+evaluated test_poisson_disk_00003.npz
+evaluated test_poisson_disk_00004.npz
+evaluated test_poisson_disk_00005.npz
+evaluated test_poisson_disk_00006.npz
+evaluated test_poisson_disk_00007.npz
+evaluated test_poisson_disk_00008.npz
+evaluated test_poisson_disk_00009.npz
+evaluated test_poisson_disk_00010.npz
+evaluated test_poisson_disk_00011.npz
+evaluated test_poisson_disk_00012.npz
+evaluated test_poisson_disk_00013.npz
+evaluated test_poisson_disk_00014.npz
+evaluated test_poisson_disk_00015.npz
+evaluated test_poisson_disk_00016.npz
+evaluated test_poisson_disk_00017.npz
+evaluated test_poisson_disk_00018.npz
+evaluated test_poisson_disk_00019.npz
+evaluated test_poisson_disk_00020.npz
+evaluated test_poisson_disk_00021.npz
+evaluated test_poisson_disk_00022.npz
+evaluated test_poisson_disk_00023.npz
+evaluated test_poisson_disk_00024.npz
+evaluated test_poisson_disk_00025.npz
+evaluated test_poisson_disk_00026.npz
+evaluated test_poisson_disk_00027.npz
+evaluated test_poisson_disk_00028.npz
+evaluated test_poisson_disk_00029.npz
+evaluated test_poisson_disk_00030.npz
+evaluated test_poisson_disk_00031.npz
+evaluated test_poisson_disk_00032.npz
+evaluated test_poisson_disk_00033.npz
+evaluated test_poisson_disk_00034.npz
+evaluated test_poisson_disk_00035.npz
+evaluated test_poisson_disk_00036.npz
+evaluated test_poisson_disk_00037.npz
+evaluated test_poisson_disk_00038.npz
+evaluated test_poisson_disk_00039.npz
+evaluated test_poisson_disk_00040.npz
+evaluated test_poisson_disk_00041.npz
+evaluated test_poisson_disk_00042.npz
+evaluated test_poisson_disk_00043.npz
+evaluated test_poisson_disk_00044.npz
+evaluated test_poisson_disk_00045.npz
+evaluated test_poisson_disk_00046.npz
+evaluated test_poisson_disk_00047.npz
+evaluated test_poisson_disk_00048.npz
+evaluated test_poisson_disk_00049.npz
+evaluated test_poisson_disk_00050.npz
+evaluated test_poisson_disk_00051.npz
+evaluated test_poisson_disk_00052.npz
+evaluated test_poisson_disk_00053.npz
+evaluated test_poisson_disk_00054.npz
+evaluated test_poisson_disk_00055.npz
+evaluated test_poisson_disk_00056.npz
+evaluated test_poisson_disk_00057.npz
+evaluated test_poisson_disk_00058.npz
+evaluated test_poisson_disk_00059.npz
+evaluated test_poisson_disk_00060.npz
+evaluated test_poisson_disk_00061.npz
+evaluated test_poisson_disk_00062.npz
+evaluated test_poisson_disk_00063.npz
+evaluated test_poisson_disk_00064.npz
+evaluated test_poisson_disk_00065.npz
+evaluated test_poisson_disk_00066.npz
+evaluated test_poisson_disk_00067.npz
+evaluated test_poisson_disk_00068.npz
+evaluated test_poisson_disk_00069.npz
+evaluated test_poisson_disk_00070.npz
+evaluated test_poisson_disk_00071.npz
+evaluated test_poisson_disk_00072.npz
+evaluated test_poisson_disk_00073.npz
+evaluated test_poisson_disk_00074.npz
+evaluated test_poisson_disk_00075.npz
+evaluated test_poisson_disk_00076.npz
+evaluated test_poisson_disk_00077.npz
+evaluated test_poisson_disk_00078.npz
+evaluated test_poisson_disk_00079.npz
+evaluated test_poisson_disk_00080.npz
+evaluated test_poisson_disk_00081.npz
+evaluated test_poisson_disk_00082.npz
+evaluated test_poisson_disk_00083.npz
+evaluated test_poisson_disk_00084.npz
+evaluated test_poisson_disk_00085.npz
+evaluated test_poisson_disk_00086.npz
+evaluated test_poisson_disk_00087.npz
+evaluated test_poisson_disk_00088.npz
+evaluated test_poisson_disk_00089.npz
+evaluated test_poisson_disk_00090.npz
+evaluated test_poisson_disk_00091.npz
+evaluated test_poisson_disk_00092.npz
+evaluated test_poisson_disk_00093.npz
+evaluated test_poisson_disk_00094.npz
+evaluated test_poisson_disk_00095.npz
+evaluated test_poisson_disk_00096.npz
+evaluated test_poisson_disk_00097.npz
+evaluated test_poisson_disk_00098.npz
+evaluated test_poisson_disk_00099.npz
+evaluated test_poisson_disk_00100.npz
+evaluated test_poisson_disk_00101.npz
+evaluated test_poisson_disk_00102.npz
+evaluated test_poisson_disk_00103.npz
+evaluated test_poisson_disk_00104.npz
+evaluated test_poisson_disk_00105.npz
+evaluated test_poisson_disk_00106.npz
+evaluated test_poisson_disk_00107.npz
+evaluated test_poisson_disk_00108.npz
+evaluated test_poisson_disk_00109.npz
+evaluated test_poisson_disk_00110.npz
+evaluated test_poisson_disk_00111.npz
+evaluated test_poisson_disk_00112.npz
+evaluated test_poisson_disk_00113.npz
+evaluated test_poisson_disk_00114.npz
+evaluated test_poisson_disk_00115.npz
+evaluated test_poisson_disk_00116.npz
+evaluated test_poisson_disk_00117.npz
+evaluated test_poisson_disk_00118.npz
+evaluated test_poisson_disk_00119.npz
+evaluated test_poisson_disk_00120.npz
+evaluated test_poisson_disk_00121.npz
+evaluated test_poisson_disk_00122.npz
+evaluated test_poisson_disk_00123.npz
+evaluated test_poisson_disk_00124.npz
+evaluated test_poisson_disk_00125.npz
+evaluated test_poisson_disk_00126.npz
+evaluated test_poisson_disk_00127.npz
+evaluated test_poisson_lshape_00000.npz
+evaluated test_poisson_lshape_00001.npz
+evaluated test_poisson_lshape_00002.npz
+evaluated test_poisson_lshape_00003.npz
+evaluated test_poisson_lshape_00004.npz
+evaluated test_poisson_lshape_00005.npz
+evaluated test_poisson_lshape_00006.npz
+evaluated test_poisson_lshape_00007.npz
+evaluated test_poisson_lshape_00008.npz
+evaluated test_poisson_lshape_00009.npz
+evaluated test_poisson_lshape_00010.npz
+evaluated test_poisson_lshape_00011.npz
+evaluated test_poisson_lshape_00012.npz
+evaluated test_poisson_lshape_00013.npz
+evaluated test_poisson_lshape_00014.npz
+evaluated test_poisson_lshape_00015.npz
+evaluated test_poisson_lshape_00016.npz
+evaluated test_poisson_lshape_00017.npz
+evaluated test_poisson_lshape_00018.npz
+evaluated test_poisson_lshape_00019.npz
+evaluated test_poisson_lshape_00020.npz
+evaluated test_poisson_lshape_00021.npz
+evaluated test_poisson_lshape_00022.npz
+evaluated test_poisson_lshape_00023.npz
+evaluated test_poisson_lshape_00024.npz
+evaluated test_poisson_lshape_00025.npz
+evaluated test_poisson_lshape_00026.npz
+evaluated test_poisson_lshape_00027.npz
+evaluated test_poisson_lshape_00028.npz
+evaluated test_poisson_lshape_00029.npz
+evaluated test_poisson_lshape_00030.npz
+evaluated test_poisson_lshape_00031.npz
+evaluated test_poisson_lshape_00032.npz
+evaluated test_poisson_lshape_00033.npz
+evaluated test_poisson_lshape_00034.npz
+evaluated test_poisson_lshape_00035.npz
+evaluated test_poisson_lshape_00036.npz
+evaluated test_poisson_lshape_00037.npz
+evaluated test_poisson_lshape_00038.npz
+evaluated test_poisson_lshape_00039.npz
+evaluated test_poisson_lshape_00040.npz
+evaluated test_poisson_lshape_00041.npz
+evaluated test_poisson_lshape_00042.npz
+evaluated test_poisson_lshape_00043.npz
+evaluated test_poisson_lshape_00044.npz
+evaluated test_poisson_lshape_00045.npz
+evaluated test_poisson_lshape_00046.npz
+evaluated test_poisson_lshape_00047.npz
+evaluated test_poisson_lshape_00048.npz
+evaluated test_poisson_lshape_00049.npz
+evaluated test_poisson_lshape_00050.npz
+evaluated test_poisson_lshape_00051.npz
+evaluated test_poisson_lshape_00052.npz
+evaluated test_poisson_lshape_00053.npz
+evaluated test_poisson_lshape_00054.npz
+evaluated test_poisson_lshape_00055.npz
+evaluated test_poisson_lshape_00056.npz
+evaluated test_poisson_lshape_00057.npz
+evaluated test_poisson_lshape_00058.npz
+evaluated test_poisson_lshape_00059.npz
+evaluated test_poisson_lshape_00060.npz
+evaluated test_poisson_lshape_00061.npz
+evaluated test_poisson_lshape_00062.npz
+evaluated test_poisson_lshape_00063.npz
+evaluated test_poisson_lshape_00064.npz
+evaluated test_poisson_lshape_00065.npz
+evaluated test_poisson_lshape_00066.npz
+evaluated test_poisson_lshape_00067.npz
+evaluated test_poisson_lshape_00068.npz
+evaluated test_poisson_lshape_00069.npz
+evaluated test_poisson_lshape_00070.npz
+evaluated test_poisson_lshape_00071.npz
+evaluated test_poisson_lshape_00072.npz
+evaluated test_poisson_lshape_00073.npz
+evaluated test_poisson_lshape_00074.npz
+evaluated test_poisson_lshape_00075.npz
+evaluated test_poisson_lshape_00076.npz
+evaluated test_poisson_lshape_00077.npz
+evaluated test_poisson_lshape_00078.npz
+evaluated test_poisson_lshape_00079.npz
+evaluated test_poisson_lshape_00080.npz
+evaluated test_poisson_lshape_00081.npz
+evaluated test_poisson_lshape_00082.npz
+evaluated test_poisson_lshape_00083.npz
+evaluated test_poisson_lshape_00084.npz
+evaluated test_poisson_lshape_00085.npz
+evaluated test_poisson_lshape_00086.npz
+evaluated test_poisson_lshape_00087.npz
+evaluated test_poisson_lshape_00088.npz
+evaluated test_poisson_lshape_00089.npz
+evaluated test_poisson_lshape_00090.npz
+evaluated test_poisson_lshape_00091.npz
+evaluated test_poisson_lshape_00092.npz
+evaluated test_poisson_lshape_00093.npz
+evaluated test_poisson_lshape_00094.npz
+evaluated test_poisson_lshape_00095.npz
+evaluated test_poisson_lshape_00096.npz
+evaluated test_poisson_lshape_00097.npz
+evaluated test_poisson_lshape_00098.npz
+evaluated test_poisson_lshape_00099.npz
+evaluated test_poisson_lshape_00100.npz
+evaluated test_poisson_lshape_00101.npz
+evaluated test_poisson_lshape_00102.npz
+evaluated test_poisson_lshape_00103.npz
+evaluated test_poisson_lshape_00104.npz
+evaluated test_poisson_lshape_00105.npz
+evaluated test_poisson_lshape_00106.npz
+evaluated test_poisson_lshape_00107.npz
+evaluated test_poisson_lshape_00108.npz
+evaluated test_poisson_lshape_00109.npz
+evaluated test_poisson_lshape_00110.npz
+evaluated test_poisson_lshape_00111.npz
+evaluated test_poisson_lshape_00112.npz
+evaluated test_poisson_lshape_00113.npz
+evaluated test_poisson_lshape_00114.npz
+evaluated test_poisson_lshape_00115.npz
+evaluated test_poisson_lshape_00116.npz
+evaluated test_poisson_lshape_00117.npz
+evaluated test_poisson_lshape_00118.npz
+evaluated test_poisson_lshape_00119.npz
+evaluated test_poisson_lshape_00120.npz
+evaluated test_poisson_lshape_00121.npz
+evaluated test_poisson_lshape_00122.npz
+evaluated test_poisson_lshape_00123.npz
+evaluated test_poisson_lshape_00124.npz
+evaluated test_poisson_lshape_00125.npz
+evaluated test_poisson_lshape_00126.npz
+evaluated test_poisson_lshape_00127.npz
+prior: mean per-case RMSE=0.049844 (6912 quantity/case/mode/count records)
+rbf: mean per-case RMSE=0.055269 (6912 quantity/case/mode/count records)
+CSV metrics and fields: runs/g1_base_test3k
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple eval --data data/g1_test --run runs/a_test3k \
+  --split test --observations 0,8,16,32,64,128 --out runs/a_test3k/evaluation
+A-Geo m: 6,478,339 parameters; {'width': 256, 'layers': 7, 'heads': 8, 'memory': 24}
+evaluated test_poisson_square_00000.npz
+evaluated test_poisson_square_00001.npz
+evaluated test_poisson_square_00002.npz
+evaluated test_poisson_square_00003.npz
+evaluated test_poisson_square_00004.npz
+evaluated test_poisson_square_00005.npz
+evaluated test_poisson_square_00006.npz
+evaluated test_poisson_square_00007.npz
+evaluated test_poisson_square_00008.npz
+evaluated test_poisson_square_00009.npz
+evaluated test_poisson_square_00010.npz
+evaluated test_poisson_square_00011.npz
+evaluated test_poisson_square_00012.npz
+evaluated test_poisson_square_00013.npz
+evaluated test_poisson_square_00014.npz
+evaluated test_poisson_square_00015.npz
+evaluated test_poisson_square_00016.npz
+evaluated test_poisson_square_00017.npz
+evaluated test_poisson_square_00018.npz
+evaluated test_poisson_square_00019.npz
+evaluated test_poisson_square_00020.npz
+evaluated test_poisson_square_00021.npz
+evaluated test_poisson_square_00022.npz
+evaluated test_poisson_square_00023.npz
+evaluated test_poisson_square_00024.npz
+evaluated test_poisson_square_00025.npz
+evaluated test_poisson_square_00026.npz
+evaluated test_poisson_square_00027.npz
+evaluated test_poisson_square_00028.npz
+evaluated test_poisson_square_00029.npz
+evaluated test_poisson_square_00030.npz
+evaluated test_poisson_square_00031.npz
+evaluated test_poisson_square_00032.npz
+evaluated test_poisson_square_00033.npz
+evaluated test_poisson_square_00034.npz
+evaluated test_poisson_square_00035.npz
+evaluated test_poisson_square_00036.npz
+evaluated test_poisson_square_00037.npz
+evaluated test_poisson_square_00038.npz
+evaluated test_poisson_square_00039.npz
+evaluated test_poisson_square_00040.npz
+evaluated test_poisson_square_00041.npz
+evaluated test_poisson_square_00042.npz
+evaluated test_poisson_square_00043.npz
+evaluated test_poisson_square_00044.npz
+evaluated test_poisson_square_00045.npz
+evaluated test_poisson_square_00046.npz
+evaluated test_poisson_square_00047.npz
+evaluated test_poisson_square_00048.npz
+evaluated test_poisson_square_00049.npz
+evaluated test_poisson_square_00050.npz
+evaluated test_poisson_square_00051.npz
+evaluated test_poisson_square_00052.npz
+evaluated test_poisson_square_00053.npz
+evaluated test_poisson_square_00054.npz
+evaluated test_poisson_square_00055.npz
+evaluated test_poisson_square_00056.npz
+evaluated test_poisson_square_00057.npz
+evaluated test_poisson_square_00058.npz
+evaluated test_poisson_square_00059.npz
+evaluated test_poisson_square_00060.npz
+evaluated test_poisson_square_00061.npz
+evaluated test_poisson_square_00062.npz
+evaluated test_poisson_square_00063.npz
+evaluated test_poisson_square_00064.npz
+evaluated test_poisson_square_00065.npz
+evaluated test_poisson_square_00066.npz
+evaluated test_poisson_square_00067.npz
+evaluated test_poisson_square_00068.npz
+evaluated test_poisson_square_00069.npz
+evaluated test_poisson_square_00070.npz
+evaluated test_poisson_square_00071.npz
+evaluated test_poisson_square_00072.npz
+evaluated test_poisson_square_00073.npz
+evaluated test_poisson_square_00074.npz
+evaluated test_poisson_square_00075.npz
+evaluated test_poisson_square_00076.npz
+evaluated test_poisson_square_00077.npz
+evaluated test_poisson_square_00078.npz
+evaluated test_poisson_square_00079.npz
+evaluated test_poisson_square_00080.npz
+evaluated test_poisson_square_00081.npz
+evaluated test_poisson_square_00082.npz
+evaluated test_poisson_square_00083.npz
+evaluated test_poisson_square_00084.npz
+evaluated test_poisson_square_00085.npz
+evaluated test_poisson_square_00086.npz
+evaluated test_poisson_square_00087.npz
+evaluated test_poisson_square_00088.npz
+evaluated test_poisson_square_00089.npz
+evaluated test_poisson_square_00090.npz
+evaluated test_poisson_square_00091.npz
+evaluated test_poisson_square_00092.npz
+evaluated test_poisson_square_00093.npz
+evaluated test_poisson_square_00094.npz
+evaluated test_poisson_square_00095.npz
+evaluated test_poisson_square_00096.npz
+evaluated test_poisson_square_00097.npz
+evaluated test_poisson_square_00098.npz
+evaluated test_poisson_square_00099.npz
+evaluated test_poisson_square_00100.npz
+evaluated test_poisson_square_00101.npz
+evaluated test_poisson_square_00102.npz
+evaluated test_poisson_square_00103.npz
+evaluated test_poisson_square_00104.npz
+evaluated test_poisson_square_00105.npz
+evaluated test_poisson_square_00106.npz
+evaluated test_poisson_square_00107.npz
+evaluated test_poisson_square_00108.npz
+evaluated test_poisson_square_00109.npz
+evaluated test_poisson_square_00110.npz
+evaluated test_poisson_square_00111.npz
+evaluated test_poisson_square_00112.npz
+evaluated test_poisson_square_00113.npz
+evaluated test_poisson_square_00114.npz
+evaluated test_poisson_square_00115.npz
+evaluated test_poisson_square_00116.npz
+evaluated test_poisson_square_00117.npz
+evaluated test_poisson_square_00118.npz
+evaluated test_poisson_square_00119.npz
+evaluated test_poisson_square_00120.npz
+evaluated test_poisson_square_00121.npz
+evaluated test_poisson_square_00122.npz
+evaluated test_poisson_square_00123.npz
+evaluated test_poisson_square_00124.npz
+evaluated test_poisson_square_00125.npz
+evaluated test_poisson_square_00126.npz
+evaluated test_poisson_square_00127.npz
+evaluated test_poisson_disk_00000.npz
+evaluated test_poisson_disk_00001.npz
+evaluated test_poisson_disk_00002.npz
+evaluated test_poisson_disk_00003.npz
+evaluated test_poisson_disk_00004.npz
+evaluated test_poisson_disk_00005.npz
+evaluated test_poisson_disk_00006.npz
+evaluated test_poisson_disk_00007.npz
+evaluated test_poisson_disk_00008.npz
+evaluated test_poisson_disk_00009.npz
+evaluated test_poisson_disk_00010.npz
+evaluated test_poisson_disk_00011.npz
+evaluated test_poisson_disk_00012.npz
+evaluated test_poisson_disk_00013.npz
+evaluated test_poisson_disk_00014.npz
+evaluated test_poisson_disk_00015.npz
+evaluated test_poisson_disk_00016.npz
+evaluated test_poisson_disk_00017.npz
+evaluated test_poisson_disk_00018.npz
+evaluated test_poisson_disk_00019.npz
+evaluated test_poisson_disk_00020.npz
+evaluated test_poisson_disk_00021.npz
+evaluated test_poisson_disk_00022.npz
+evaluated test_poisson_disk_00023.npz
+evaluated test_poisson_disk_00024.npz
+evaluated test_poisson_disk_00025.npz
+evaluated test_poisson_disk_00026.npz
+evaluated test_poisson_disk_00027.npz
+evaluated test_poisson_disk_00028.npz
+evaluated test_poisson_disk_00029.npz
+evaluated test_poisson_disk_00030.npz
+evaluated test_poisson_disk_00031.npz
+evaluated test_poisson_disk_00032.npz
+evaluated test_poisson_disk_00033.npz
+evaluated test_poisson_disk_00034.npz
+evaluated test_poisson_disk_00035.npz
+evaluated test_poisson_disk_00036.npz
+evaluated test_poisson_disk_00037.npz
+evaluated test_poisson_disk_00038.npz
+evaluated test_poisson_disk_00039.npz
+evaluated test_poisson_disk_00040.npz
+evaluated test_poisson_disk_00041.npz
+evaluated test_poisson_disk_00042.npz
+evaluated test_poisson_disk_00043.npz
+evaluated test_poisson_disk_00044.npz
+evaluated test_poisson_disk_00045.npz
+evaluated test_poisson_disk_00046.npz
+evaluated test_poisson_disk_00047.npz
+evaluated test_poisson_disk_00048.npz
+evaluated test_poisson_disk_00049.npz
+evaluated test_poisson_disk_00050.npz
+evaluated test_poisson_disk_00051.npz
+evaluated test_poisson_disk_00052.npz
+evaluated test_poisson_disk_00053.npz
+evaluated test_poisson_disk_00054.npz
+evaluated test_poisson_disk_00055.npz
+evaluated test_poisson_disk_00056.npz
+evaluated test_poisson_disk_00057.npz
+evaluated test_poisson_disk_00058.npz
+evaluated test_poisson_disk_00059.npz
+evaluated test_poisson_disk_00060.npz
+evaluated test_poisson_disk_00061.npz
+evaluated test_poisson_disk_00062.npz
+evaluated test_poisson_disk_00063.npz
+evaluated test_poisson_disk_00064.npz
+evaluated test_poisson_disk_00065.npz
+evaluated test_poisson_disk_00066.npz
+evaluated test_poisson_disk_00067.npz
+evaluated test_poisson_disk_00068.npz
+evaluated test_poisson_disk_00069.npz
+evaluated test_poisson_disk_00070.npz
+evaluated test_poisson_disk_00071.npz
+evaluated test_poisson_disk_00072.npz
+evaluated test_poisson_disk_00073.npz
+evaluated test_poisson_disk_00074.npz
+evaluated test_poisson_disk_00075.npz
+evaluated test_poisson_disk_00076.npz
+evaluated test_poisson_disk_00077.npz
+evaluated test_poisson_disk_00078.npz
+evaluated test_poisson_disk_00079.npz
+evaluated test_poisson_disk_00080.npz
+evaluated test_poisson_disk_00081.npz
+evaluated test_poisson_disk_00082.npz
+evaluated test_poisson_disk_00083.npz
+evaluated test_poisson_disk_00084.npz
+evaluated test_poisson_disk_00085.npz
+evaluated test_poisson_disk_00086.npz
+evaluated test_poisson_disk_00087.npz
+evaluated test_poisson_disk_00088.npz
+evaluated test_poisson_disk_00089.npz
+evaluated test_poisson_disk_00090.npz
+evaluated test_poisson_disk_00091.npz
+evaluated test_poisson_disk_00092.npz
+evaluated test_poisson_disk_00093.npz
+evaluated test_poisson_disk_00094.npz
+evaluated test_poisson_disk_00095.npz
+evaluated test_poisson_disk_00096.npz
+evaluated test_poisson_disk_00097.npz
+evaluated test_poisson_disk_00098.npz
+evaluated test_poisson_disk_00099.npz
+evaluated test_poisson_disk_00100.npz
+evaluated test_poisson_disk_00101.npz
+evaluated test_poisson_disk_00102.npz
+evaluated test_poisson_disk_00103.npz
+evaluated test_poisson_disk_00104.npz
+evaluated test_poisson_disk_00105.npz
+evaluated test_poisson_disk_00106.npz
+evaluated test_poisson_disk_00107.npz
+evaluated test_poisson_disk_00108.npz
+evaluated test_poisson_disk_00109.npz
+evaluated test_poisson_disk_00110.npz
+evaluated test_poisson_disk_00111.npz
+evaluated test_poisson_disk_00112.npz
+evaluated test_poisson_disk_00113.npz
+evaluated test_poisson_disk_00114.npz
+evaluated test_poisson_disk_00115.npz
+evaluated test_poisson_disk_00116.npz
+evaluated test_poisson_disk_00117.npz
+evaluated test_poisson_disk_00118.npz
+evaluated test_poisson_disk_00119.npz
+evaluated test_poisson_disk_00120.npz
+evaluated test_poisson_disk_00121.npz
+evaluated test_poisson_disk_00122.npz
+evaluated test_poisson_disk_00123.npz
+evaluated test_poisson_disk_00124.npz
+evaluated test_poisson_disk_00125.npz
+evaluated test_poisson_disk_00126.npz
+evaluated test_poisson_disk_00127.npz
+evaluated test_poisson_lshape_00000.npz
+evaluated test_poisson_lshape_00001.npz
+evaluated test_poisson_lshape_00002.npz
+evaluated test_poisson_lshape_00003.npz
+evaluated test_poisson_lshape_00004.npz
+evaluated test_poisson_lshape_00005.npz
+evaluated test_poisson_lshape_00006.npz
+evaluated test_poisson_lshape_00007.npz
+evaluated test_poisson_lshape_00008.npz
+evaluated test_poisson_lshape_00009.npz
+evaluated test_poisson_lshape_00010.npz
+evaluated test_poisson_lshape_00011.npz
+evaluated test_poisson_lshape_00012.npz
+evaluated test_poisson_lshape_00013.npz
+evaluated test_poisson_lshape_00014.npz
+evaluated test_poisson_lshape_00015.npz
+evaluated test_poisson_lshape_00016.npz
+evaluated test_poisson_lshape_00017.npz
+evaluated test_poisson_lshape_00018.npz
+evaluated test_poisson_lshape_00019.npz
+evaluated test_poisson_lshape_00020.npz
+evaluated test_poisson_lshape_00021.npz
+evaluated test_poisson_lshape_00022.npz
+evaluated test_poisson_lshape_00023.npz
+evaluated test_poisson_lshape_00024.npz
+evaluated test_poisson_lshape_00025.npz
+evaluated test_poisson_lshape_00026.npz
+evaluated test_poisson_lshape_00027.npz
+evaluated test_poisson_lshape_00028.npz
+evaluated test_poisson_lshape_00029.npz
+evaluated test_poisson_lshape_00030.npz
+evaluated test_poisson_lshape_00031.npz
+evaluated test_poisson_lshape_00032.npz
+evaluated test_poisson_lshape_00033.npz
+evaluated test_poisson_lshape_00034.npz
+evaluated test_poisson_lshape_00035.npz
+evaluated test_poisson_lshape_00036.npz
+evaluated test_poisson_lshape_00037.npz
+evaluated test_poisson_lshape_00038.npz
+evaluated test_poisson_lshape_00039.npz
+evaluated test_poisson_lshape_00040.npz
+evaluated test_poisson_lshape_00041.npz
+evaluated test_poisson_lshape_00042.npz
+evaluated test_poisson_lshape_00043.npz
+evaluated test_poisson_lshape_00044.npz
+evaluated test_poisson_lshape_00045.npz
+evaluated test_poisson_lshape_00046.npz
+evaluated test_poisson_lshape_00047.npz
+evaluated test_poisson_lshape_00048.npz
+evaluated test_poisson_lshape_00049.npz
+evaluated test_poisson_lshape_00050.npz
+evaluated test_poisson_lshape_00051.npz
+evaluated test_poisson_lshape_00052.npz
+evaluated test_poisson_lshape_00053.npz
+evaluated test_poisson_lshape_00054.npz
+evaluated test_poisson_lshape_00055.npz
+evaluated test_poisson_lshape_00056.npz
+evaluated test_poisson_lshape_00057.npz
+evaluated test_poisson_lshape_00058.npz
+evaluated test_poisson_lshape_00059.npz
+evaluated test_poisson_lshape_00060.npz
+evaluated test_poisson_lshape_00061.npz
+evaluated test_poisson_lshape_00062.npz
+evaluated test_poisson_lshape_00063.npz
+evaluated test_poisson_lshape_00064.npz
+evaluated test_poisson_lshape_00065.npz
+evaluated test_poisson_lshape_00066.npz
+evaluated test_poisson_lshape_00067.npz
+evaluated test_poisson_lshape_00068.npz
+evaluated test_poisson_lshape_00069.npz
+evaluated test_poisson_lshape_00070.npz
+evaluated test_poisson_lshape_00071.npz
+evaluated test_poisson_lshape_00072.npz
+evaluated test_poisson_lshape_00073.npz
+evaluated test_poisson_lshape_00074.npz
+evaluated test_poisson_lshape_00075.npz
+evaluated test_poisson_lshape_00076.npz
+evaluated test_poisson_lshape_00077.npz
+evaluated test_poisson_lshape_00078.npz
+evaluated test_poisson_lshape_00079.npz
+evaluated test_poisson_lshape_00080.npz
+evaluated test_poisson_lshape_00081.npz
+evaluated test_poisson_lshape_00082.npz
+evaluated test_poisson_lshape_00083.npz
+evaluated test_poisson_lshape_00084.npz
+evaluated test_poisson_lshape_00085.npz
+evaluated test_poisson_lshape_00086.npz
+evaluated test_poisson_lshape_00087.npz
+evaluated test_poisson_lshape_00088.npz
+evaluated test_poisson_lshape_00089.npz
+evaluated test_poisson_lshape_00090.npz
+evaluated test_poisson_lshape_00091.npz
+evaluated test_poisson_lshape_00092.npz
+evaluated test_poisson_lshape_00093.npz
+evaluated test_poisson_lshape_00094.npz
+evaluated test_poisson_lshape_00095.npz
+evaluated test_poisson_lshape_00096.npz
+evaluated test_poisson_lshape_00097.npz
+evaluated test_poisson_lshape_00098.npz
+evaluated test_poisson_lshape_00099.npz
+evaluated test_poisson_lshape_00100.npz
+evaluated test_poisson_lshape_00101.npz
+evaluated test_poisson_lshape_00102.npz
+evaluated test_poisson_lshape_00103.npz
+evaluated test_poisson_lshape_00104.npz
+evaluated test_poisson_lshape_00105.npz
+evaluated test_poisson_lshape_00106.npz
+evaluated test_poisson_lshape_00107.npz
+evaluated test_poisson_lshape_00108.npz
+evaluated test_poisson_lshape_00109.npz
+evaluated test_poisson_lshape_00110.npz
+evaluated test_poisson_lshape_00111.npz
+evaluated test_poisson_lshape_00112.npz
+evaluated test_poisson_lshape_00113.npz
+evaluated test_poisson_lshape_00114.npz
+evaluated test_poisson_lshape_00115.npz
+evaluated test_poisson_lshape_00116.npz
+evaluated test_poisson_lshape_00117.npz
+evaluated test_poisson_lshape_00118.npz
+evaluated test_poisson_lshape_00119.npz
+evaluated test_poisson_lshape_00120.npz
+evaluated test_poisson_lshape_00121.npz
+evaluated test_poisson_lshape_00122.npz
+evaluated test_poisson_lshape_00123.npz
+evaluated test_poisson_lshape_00124.npz
+evaluated test_poisson_lshape_00125.npz
+evaluated test_poisson_lshape_00126.npz
+evaluated test_poisson_lshape_00127.npz
+A-Geo: mean per-case RMSE=0.042262 (6912 quantity/case/mode/count records)
+CSV metrics and fields: runs/a_test3k/evaluation
+(simple) nicolasackermann@Nicolass-MacBook-Pro simple % python -m pdeep_simple eval --data data/g1_test --run runs/c_test3k \
+  --split test --observations 0,8,16,32,64,128 --out runs/c_test3k/evaluation
+C-Geo m: 5,739,267 parameters; {'width': 256, 'layers': 7, 'heads': 8, 'memory': 24}
+evaluated test_poisson_square_00000.npz
+evaluated test_poisson_square_00001.npz
+evaluated test_poisson_square_00002.npz
+evaluated test_poisson_square_00003.npz
+evaluated test_poisson_square_00004.npz
+evaluated test_poisson_square_00005.npz
+evaluated test_poisson_square_00006.npz
+evaluated test_poisson_square_00007.npz
+evaluated test_poisson_square_00008.npz
+evaluated test_poisson_square_00009.npz
+evaluated test_poisson_square_00010.npz
+evaluated test_poisson_square_00011.npz
+evaluated test_poisson_square_00012.npz
+evaluated test_poisson_square_00013.npz
+evaluated test_poisson_square_00014.npz
+evaluated test_poisson_square_00015.npz
+evaluated test_poisson_square_00016.npz
+evaluated test_poisson_square_00017.npz
+evaluated test_poisson_square_00018.npz
+evaluated test_poisson_square_00019.npz
+evaluated test_poisson_square_00020.npz
+evaluated test_poisson_square_00021.npz
+evaluated test_poisson_square_00022.npz
+evaluated test_poisson_square_00023.npz
+evaluated test_poisson_square_00024.npz
+evaluated test_poisson_square_00025.npz
+evaluated test_poisson_square_00026.npz
+evaluated test_poisson_square_00027.npz
+evaluated test_poisson_square_00028.npz
+evaluated test_poisson_square_00029.npz
+evaluated test_poisson_square_00030.npz
+evaluated test_poisson_square_00031.npz
+evaluated test_poisson_square_00032.npz
+evaluated test_poisson_square_00033.npz
+evaluated test_poisson_square_00034.npz
+evaluated test_poisson_square_00035.npz
+evaluated test_poisson_square_00036.npz
+evaluated test_poisson_square_00037.npz
+evaluated test_poisson_square_00038.npz
+evaluated test_poisson_square_00039.npz
+evaluated test_poisson_square_00040.npz
+evaluated test_poisson_square_00041.npz
+evaluated test_poisson_square_00042.npz
+evaluated test_poisson_square_00043.npz
+evaluated test_poisson_square_00044.npz
+evaluated test_poisson_square_00045.npz
+evaluated test_poisson_square_00046.npz
+evaluated test_poisson_square_00047.npz
+evaluated test_poisson_square_00048.npz
+evaluated test_poisson_square_00049.npz
+evaluated test_poisson_square_00050.npz
+evaluated test_poisson_square_00051.npz
+evaluated test_poisson_square_00052.npz
+evaluated test_poisson_square_00053.npz
+evaluated test_poisson_square_00054.npz
+evaluated test_poisson_square_00055.npz
+evaluated test_poisson_square_00056.npz
+evaluated test_poisson_square_00057.npz
+evaluated test_poisson_square_00058.npz
+evaluated test_poisson_square_00059.npz
+evaluated test_poisson_square_00060.npz
+evaluated test_poisson_square_00061.npz
+evaluated test_poisson_square_00062.npz
+evaluated test_poisson_square_00063.npz
+evaluated test_poisson_square_00064.npz
+evaluated test_poisson_square_00065.npz
+evaluated test_poisson_square_00066.npz
+evaluated test_poisson_square_00067.npz
+evaluated test_poisson_square_00068.npz
+evaluated test_poisson_square_00069.npz
+evaluated test_poisson_square_00070.npz
+evaluated test_poisson_square_00071.npz
+evaluated test_poisson_square_00072.npz
+evaluated test_poisson_square_00073.npz
+evaluated test_poisson_square_00074.npz
+evaluated test_poisson_square_00075.npz
+evaluated test_poisson_square_00076.npz
+evaluated test_poisson_square_00077.npz
+evaluated test_poisson_square_00078.npz
+evaluated test_poisson_square_00079.npz
+evaluated test_poisson_square_00080.npz
+evaluated test_poisson_square_00081.npz
+evaluated test_poisson_square_00082.npz
+evaluated test_poisson_square_00083.npz
+evaluated test_poisson_square_00084.npz
+evaluated test_poisson_square_00085.npz
+evaluated test_poisson_square_00086.npz
+evaluated test_poisson_square_00087.npz
+evaluated test_poisson_square_00088.npz
+evaluated test_poisson_square_00089.npz
+evaluated test_poisson_square_00090.npz
+evaluated test_poisson_square_00091.npz
+evaluated test_poisson_square_00092.npz
+evaluated test_poisson_square_00093.npz
+evaluated test_poisson_square_00094.npz
+evaluated test_poisson_square_00095.npz
+evaluated test_poisson_square_00096.npz
+evaluated test_poisson_square_00097.npz
+evaluated test_poisson_square_00098.npz
+evaluated test_poisson_square_00099.npz
+evaluated test_poisson_square_00100.npz
+evaluated test_poisson_square_00101.npz
+evaluated test_poisson_square_00102.npz
+evaluated test_poisson_square_00103.npz
+evaluated test_poisson_square_00104.npz
+evaluated test_poisson_square_00105.npz
+evaluated test_poisson_square_00106.npz
+evaluated test_poisson_square_00107.npz
+evaluated test_poisson_square_00108.npz
+evaluated test_poisson_square_00109.npz
+evaluated test_poisson_square_00110.npz
+evaluated test_poisson_square_00111.npz
+evaluated test_poisson_square_00112.npz
+evaluated test_poisson_square_00113.npz
+evaluated test_poisson_square_00114.npz
+evaluated test_poisson_square_00115.npz
+evaluated test_poisson_square_00116.npz
+evaluated test_poisson_square_00117.npz
+evaluated test_poisson_square_00118.npz
+evaluated test_poisson_square_00119.npz
+evaluated test_poisson_square_00120.npz
+evaluated test_poisson_square_00121.npz
+evaluated test_poisson_square_00122.npz
+evaluated test_poisson_square_00123.npz
+evaluated test_poisson_square_00124.npz
+evaluated test_poisson_square_00125.npz
+evaluated test_poisson_square_00126.npz
+evaluated test_poisson_square_00127.npz
+evaluated test_poisson_disk_00000.npz
+evaluated test_poisson_disk_00001.npz
+evaluated test_poisson_disk_00002.npz
+evaluated test_poisson_disk_00003.npz
+evaluated test_poisson_disk_00004.npz
+evaluated test_poisson_disk_00005.npz
+evaluated test_poisson_disk_00006.npz
+evaluated test_poisson_disk_00007.npz
+evaluated test_poisson_disk_00008.npz
+evaluated test_poisson_disk_00009.npz
+evaluated test_poisson_disk_00010.npz
+evaluated test_poisson_disk_00011.npz
+evaluated test_poisson_disk_00012.npz
+evaluated test_poisson_disk_00013.npz
+evaluated test_poisson_disk_00014.npz
+evaluated test_poisson_disk_00015.npz
+evaluated test_poisson_disk_00016.npz
+evaluated test_poisson_disk_00017.npz
+evaluated test_poisson_disk_00018.npz
+evaluated test_poisson_disk_00019.npz
+evaluated test_poisson_disk_00020.npz
+evaluated test_poisson_disk_00021.npz
+evaluated test_poisson_disk_00022.npz
+evaluated test_poisson_disk_00023.npz
+evaluated test_poisson_disk_00024.npz
+evaluated test_poisson_disk_00025.npz
+evaluated test_poisson_disk_00026.npz
+evaluated test_poisson_disk_00027.npz
+evaluated test_poisson_disk_00028.npz
+evaluated test_poisson_disk_00029.npz
+evaluated test_poisson_disk_00030.npz
+evaluated test_poisson_disk_00031.npz
+evaluated test_poisson_disk_00032.npz
+evaluated test_poisson_disk_00033.npz
+evaluated test_poisson_disk_00034.npz
+evaluated test_poisson_disk_00035.npz
+evaluated test_poisson_disk_00036.npz
+evaluated test_poisson_disk_00037.npz
+evaluated test_poisson_disk_00038.npz
+evaluated test_poisson_disk_00039.npz
+evaluated test_poisson_disk_00040.npz
+evaluated test_poisson_disk_00041.npz
+evaluated test_poisson_disk_00042.npz
+evaluated test_poisson_disk_00043.npz
+evaluated test_poisson_disk_00044.npz
+evaluated test_poisson_disk_00045.npz
+evaluated test_poisson_disk_00046.npz
+evaluated test_poisson_disk_00047.npz
+evaluated test_poisson_disk_00048.npz
+evaluated test_poisson_disk_00049.npz
+evaluated test_poisson_disk_00050.npz
+evaluated test_poisson_disk_00051.npz
+evaluated test_poisson_disk_00052.npz
+evaluated test_poisson_disk_00053.npz
+evaluated test_poisson_disk_00054.npz
+evaluated test_poisson_disk_00055.npz
+evaluated test_poisson_disk_00056.npz
+evaluated test_poisson_disk_00057.npz
+evaluated test_poisson_disk_00058.npz
+evaluated test_poisson_disk_00059.npz
+evaluated test_poisson_disk_00060.npz
+evaluated test_poisson_disk_00061.npz
+evaluated test_poisson_disk_00062.npz
+evaluated test_poisson_disk_00063.npz
+evaluated test_poisson_disk_00064.npz
+evaluated test_poisson_disk_00065.npz
+evaluated test_poisson_disk_00066.npz
+evaluated test_poisson_disk_00067.npz
+evaluated test_poisson_disk_00068.npz
+evaluated test_poisson_disk_00069.npz
+evaluated test_poisson_disk_00070.npz
+evaluated test_poisson_disk_00071.npz
+evaluated test_poisson_disk_00072.npz
+evaluated test_poisson_disk_00073.npz
+evaluated test_poisson_disk_00074.npz
+evaluated test_poisson_disk_00075.npz
+evaluated test_poisson_disk_00076.npz
+evaluated test_poisson_disk_00077.npz
+evaluated test_poisson_disk_00078.npz
+evaluated test_poisson_disk_00079.npz
+evaluated test_poisson_disk_00080.npz
+evaluated test_poisson_disk_00081.npz
+evaluated test_poisson_disk_00082.npz
+evaluated test_poisson_disk_00083.npz
+evaluated test_poisson_disk_00084.npz
+evaluated test_poisson_disk_00085.npz
+evaluated test_poisson_disk_00086.npz
+evaluated test_poisson_disk_00087.npz
+evaluated test_poisson_disk_00088.npz
+evaluated test_poisson_disk_00089.npz
+evaluated test_poisson_disk_00090.npz
+evaluated test_poisson_disk_00091.npz
+evaluated test_poisson_disk_00092.npz
+evaluated test_poisson_disk_00093.npz
+evaluated test_poisson_disk_00094.npz
+evaluated test_poisson_disk_00095.npz
+evaluated test_poisson_disk_00096.npz
+evaluated test_poisson_disk_00097.npz
+evaluated test_poisson_disk_00098.npz
+evaluated test_poisson_disk_00099.npz
+evaluated test_poisson_disk_00100.npz
+evaluated test_poisson_disk_00101.npz
+evaluated test_poisson_disk_00102.npz
+evaluated test_poisson_disk_00103.npz
+evaluated test_poisson_disk_00104.npz
+evaluated test_poisson_disk_00105.npz
+evaluated test_poisson_disk_00106.npz
+evaluated test_poisson_disk_00107.npz
+evaluated test_poisson_disk_00108.npz
+evaluated test_poisson_disk_00109.npz
+evaluated test_poisson_disk_00110.npz
+evaluated test_poisson_disk_00111.npz
+evaluated test_poisson_disk_00112.npz
+evaluated test_poisson_disk_00113.npz
+evaluated test_poisson_disk_00114.npz
+evaluated test_poisson_disk_00115.npz
+evaluated test_poisson_disk_00116.npz
+evaluated test_poisson_disk_00117.npz
+evaluated test_poisson_disk_00118.npz
+evaluated test_poisson_disk_00119.npz
+evaluated test_poisson_disk_00120.npz
+evaluated test_poisson_disk_00121.npz
+evaluated test_poisson_disk_00122.npz
+evaluated test_poisson_disk_00123.npz
+evaluated test_poisson_disk_00124.npz
+evaluated test_poisson_disk_00125.npz
+evaluated test_poisson_disk_00126.npz
+evaluated test_poisson_disk_00127.npz
+evaluated test_poisson_lshape_00000.npz
+evaluated test_poisson_lshape_00001.npz
+evaluated test_poisson_lshape_00002.npz
+evaluated test_poisson_lshape_00003.npz
+evaluated test_poisson_lshape_00004.npz
+evaluated test_poisson_lshape_00005.npz
+evaluated test_poisson_lshape_00006.npz
+evaluated test_poisson_lshape_00007.npz
+evaluated test_poisson_lshape_00008.npz
+evaluated test_poisson_lshape_00009.npz
+evaluated test_poisson_lshape_00010.npz
+evaluated test_poisson_lshape_00011.npz
+evaluated test_poisson_lshape_00012.npz
+evaluated test_poisson_lshape_00013.npz
+evaluated test_poisson_lshape_00014.npz
+evaluated test_poisson_lshape_00015.npz
+evaluated test_poisson_lshape_00016.npz
+evaluated test_poisson_lshape_00017.npz
+evaluated test_poisson_lshape_00018.npz
+evaluated test_poisson_lshape_00019.npz
+evaluated test_poisson_lshape_00020.npz
+evaluated test_poisson_lshape_00021.npz
+evaluated test_poisson_lshape_00022.npz
+evaluated test_poisson_lshape_00023.npz
+evaluated test_poisson_lshape_00024.npz
+evaluated test_poisson_lshape_00025.npz
+evaluated test_poisson_lshape_00026.npz
+evaluated test_poisson_lshape_00027.npz
+evaluated test_poisson_lshape_00028.npz
+evaluated test_poisson_lshape_00029.npz
+evaluated test_poisson_lshape_00030.npz
+evaluated test_poisson_lshape_00031.npz
+evaluated test_poisson_lshape_00032.npz
+evaluated test_poisson_lshape_00033.npz
+evaluated test_poisson_lshape_00034.npz
+evaluated test_poisson_lshape_00035.npz
+evaluated test_poisson_lshape_00036.npz
+evaluated test_poisson_lshape_00037.npz
+evaluated test_poisson_lshape_00038.npz
+evaluated test_poisson_lshape_00039.npz
+evaluated test_poisson_lshape_00040.npz
+evaluated test_poisson_lshape_00041.npz
+evaluated test_poisson_lshape_00042.npz
+evaluated test_poisson_lshape_00043.npz
+evaluated test_poisson_lshape_00044.npz
+evaluated test_poisson_lshape_00045.npz
+evaluated test_poisson_lshape_00046.npz
+evaluated test_poisson_lshape_00047.npz
+evaluated test_poisson_lshape_00048.npz
+evaluated test_poisson_lshape_00049.npz
+evaluated test_poisson_lshape_00050.npz
+evaluated test_poisson_lshape_00051.npz
+evaluated test_poisson_lshape_00052.npz
+evaluated test_poisson_lshape_00053.npz
+evaluated test_poisson_lshape_00054.npz
+evaluated test_poisson_lshape_00055.npz
+evaluated test_poisson_lshape_00056.npz
+evaluated test_poisson_lshape_00057.npz
+evaluated test_poisson_lshape_00058.npz
+evaluated test_poisson_lshape_00059.npz
+evaluated test_poisson_lshape_00060.npz
+evaluated test_poisson_lshape_00061.npz
+evaluated test_poisson_lshape_00062.npz
+evaluated test_poisson_lshape_00063.npz
+evaluated test_poisson_lshape_00064.npz
+evaluated test_poisson_lshape_00065.npz
+evaluated test_poisson_lshape_00066.npz
+evaluated test_poisson_lshape_00067.npz
+evaluated test_poisson_lshape_00068.npz
+evaluated test_poisson_lshape_00069.npz
+evaluated test_poisson_lshape_00070.npz
+evaluated test_poisson_lshape_00071.npz
+evaluated test_poisson_lshape_00072.npz
+evaluated test_poisson_lshape_00073.npz
+evaluated test_poisson_lshape_00074.npz
+evaluated test_poisson_lshape_00075.npz
+evaluated test_poisson_lshape_00076.npz
+evaluated test_poisson_lshape_00077.npz
+evaluated test_poisson_lshape_00078.npz
+evaluated test_poisson_lshape_00079.npz
+evaluated test_poisson_lshape_00080.npz
+evaluated test_poisson_lshape_00081.npz
+evaluated test_poisson_lshape_00082.npz
+evaluated test_poisson_lshape_00083.npz
+evaluated test_poisson_lshape_00084.npz
+evaluated test_poisson_lshape_00085.npz
+evaluated test_poisson_lshape_00086.npz
+evaluated test_poisson_lshape_00087.npz
+evaluated test_poisson_lshape_00088.npz
+evaluated test_poisson_lshape_00089.npz
+evaluated test_poisson_lshape_00090.npz
+evaluated test_poisson_lshape_00091.npz
+evaluated test_poisson_lshape_00092.npz
+evaluated test_poisson_lshape_00093.npz
+evaluated test_poisson_lshape_00094.npz
+evaluated test_poisson_lshape_00095.npz
+evaluated test_poisson_lshape_00096.npz
+evaluated test_poisson_lshape_00097.npz
+evaluated test_poisson_lshape_00098.npz
+evaluated test_poisson_lshape_00099.npz
+evaluated test_poisson_lshape_00100.npz
+evaluated test_poisson_lshape_00101.npz
+evaluated test_poisson_lshape_00102.npz
+evaluated test_poisson_lshape_00103.npz
+evaluated test_poisson_lshape_00104.npz
+evaluated test_poisson_lshape_00105.npz
+evaluated test_poisson_lshape_00106.npz
+evaluated test_poisson_lshape_00107.npz
+evaluated test_poisson_lshape_00108.npz
+evaluated test_poisson_lshape_00109.npz
+evaluated test_poisson_lshape_00110.npz
+evaluated test_poisson_lshape_00111.npz
+evaluated test_poisson_lshape_00112.npz
+evaluated test_poisson_lshape_00113.npz
+evaluated test_poisson_lshape_00114.npz
+evaluated test_poisson_lshape_00115.npz
+evaluated test_poisson_lshape_00116.npz
+evaluated test_poisson_lshape_00117.npz
+evaluated test_poisson_lshape_00118.npz
+evaluated test_poisson_lshape_00119.npz
+evaluated test_poisson_lshape_00120.npz
+evaluated test_poisson_lshape_00121.npz
+evaluated test_poisson_lshape_00122.npz
+evaluated test_poisson_lshape_00123.npz
+evaluated test_poisson_lshape_00124.npz
+evaluated test_poisson_lshape_00125.npz
+evaluated test_poisson_lshape_00126.npz
+evaluated test_poisson_lshape_00127.npz
+C-Geo: mean per-case RMSE=0.043716 (6912 quantity/case/mode/count records)
+CSV metrics and fields: runs/c_test3k/evaluation
