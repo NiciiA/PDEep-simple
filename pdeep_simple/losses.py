@@ -84,7 +84,7 @@ def weak_residual(model, context, case, inputs, scales, time=.5):
     return residual[free] / lump[free].clamp_min(1e-10)
 
 
-def case_loss(model, case, inputs, queries, targets, scales, weights, context=None):
+def case_loss(model, case, inputs, queries, targets, scales, weights, context=None, diagnostics=None):
     if context is None:
         context = model.encode(inputs)
     prediction = model.decode(context, queries)
@@ -93,6 +93,9 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
     channels = 2 if case['meta']['pde'] in WAVES else 1
     parts = {name: prediction.sum() * 0 for name in LOSS_NAMES}
     parts['field'] = ((prediction[:, :channels] - targets[:, :channels] / scale[:channels]) ** 2).mean()
+    if diagnostics is not None and channels == 2:
+        channel_errors = (prediction[:, :2].detach() - targets[:, :2] / scale[:2]).square().mean(0)
+        diagnostics.update(zip(('u', 'v'), channel_errors.cpu().tolist()))
     if weights['aux'] and case['meta']['tier'] == 'T2':
         label = np.log(case['meta']['coefficient'])
         parts['aux'] = (context['log_coefficient'] - label) ** 2

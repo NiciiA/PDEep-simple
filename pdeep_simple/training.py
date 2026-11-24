@@ -42,8 +42,22 @@ def model_from_config(config, device='cpu', report=True):
 def csv_row(path, row):
     path = Path(path)
     new = not path.exists() or path.stat().st_size == 0
+    columns = list(row)
+    if not new:
+        with path.open(newline='') as stream:
+            reader = csv.DictReader(stream)
+            columns = reader.fieldnames
+            added = [key for key in row if key not in columns]
+            if added:
+                columns = columns + added
+                temporary = path.with_suffix(path.suffix + '.tmp')
+                with temporary.open('w', newline='') as destination:
+                    writer = csv.DictWriter(destination, fieldnames=columns)
+                    writer.writeheader(); writer.writerows(reader)
+        if added:
+            temporary.replace(path)
     with path.open('a', newline='') as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer = csv.DictWriter(stream, fieldnames=columns)
         if new:
             writer.writeheader()
         writer.writerow(row)
@@ -140,12 +154,14 @@ def train(args):
         model.train(); optimizer.zero_grad(set_to_none=True)
         totals = dict.fromkeys(LOSS_NAMES + ('total',), 0.)
         by_pde = {}; fm_total = 0.
+        wave_fields = {pde: [0., 0., 0] for pde in WAVES}
         indices = rng.choice(len(cases), config['batch'], replace=config['batch'] > len(cases))
         for index in indices:
             case = cases[index]
             mode = rng.choice(config['modes'])
             options = config['observations'] if mode == 'forward' else [n for n in config['observations'] if n > 0]
             count = int(rng.choice(options))
+            diagnostics = {}
             if stage == 'flow':
                 obs = observations(case, count, config['noise'], rng)
                 inputs = model_input(case, mode, obs, scales, rng, device)
@@ -159,7 +175,10 @@ def train(args):
                 context = None
                 if stage == 'ae':
                     context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
-                loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context)
+                loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context, diagnostics)
+                if diagnostics:
+                    values = wave_fields[case['meta']['pde']]; points = len(targets)
+                    values[0] += diagnostics['u'] * points; values[1] += diagnostics['v'] * points; values[2] += points
             if not torch.isfinite(loss):
                 raise RuntimeError(f'non-finite loss at update {update}')
             (loss / config['batch']).backward()
@@ -181,11 +200,15 @@ def train(args):
                     row[name] = ''
                 for pde in logged_pdes:
                     row[f'field_{pde}'] = ''
+        row.update({f'field_{pde}_{channel}': values[i] / values[2] if values[2] else ''
+                    for pde, values in wave_fields.items() for i, channel in enumerate(('u', 'v'))})
         csv_row(run / 'train.csv', row)
         boundary = config.get('flow') and update in (config['ae_updates'], config['ae_updates'] + 1)
         if update == 1 or boundary or update % config['validate_every'] == 0 or update == config['updates']:
             model.eval()
             validation = dict.fromkeys(LOSS_NAMES + ('total',), 0.)
+            validation_fields = {pde: [0., 0] for pde in PDES}
+            validation_waves = {pde: [0., 0., 0] for pde in WAVES}
             val_rng = np.random.default_rng(config['seed'] + 9001); val_fm = 0.
             # Recreate fixed draws each validation, over every validation physical case.
             with torch.set_grad_enabled(stage != 'flow' and bool(config['weights']['kinematic'])):
@@ -193,6 +216,7 @@ def train(args):
                     mode = config['modes'][index % len(config['modes'])]
                     counts = config['observations'] if mode == 'forward' else [n for n in config['observations'] if n > 0]
                     inputs, queries, targets = draw_training_case(case, mode, max(counts), config, scales, val_rng, device)
+                    diagnostics = {}
                     if stage == 'flow':
                         context = model.encode(inputs)
                         loss = model.matching_loss(context, val_latents[index], val_rng)
@@ -201,16 +225,25 @@ def train(args):
                         fields = [model.decode(model.with_latent(context, z), queries) for z in latents]
                         channels = 2 if case['meta']['pde'] in WAVES else 1
                         scale = torch.tensor(scales['output'], device=device)
-                        field_loss = (torch.stack(fields).mean(0)[:, :channels] - targets[:, :channels] / scale[:channels]).square().mean()
+                        prediction = torch.stack(fields).mean(0)
+                        errors = prediction[:, :channels] - targets[:, :channels] / scale[:channels]
+                        field_loss = errors.square().mean()
+                        if channels == 2:
+                            diagnostics.update(zip(('u', 'v'), errors.detach().square().mean(0).cpu().tolist()))
                         parts = dict.fromkeys(LOSS_NAMES, loss * 0); parts['field'] = field_loss
                     else:
                         context = None
                         if stage == 'ae':
                             context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
-                        loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context)
+                        loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context, diagnostics)
                     for name in parts:
                         validation[name] += float(parts[name].detach()) / len(val_cases)
                     validation['total'] += float(loss.detach()) / len(val_cases)
+                    points = len(targets); values = validation_fields[case['meta']['pde']]
+                    values[0] += float(parts['field'].detach()) * points; values[1] += points
+                    if diagnostics:
+                        values = validation_waves[case['meta']['pde']]
+                        values[0] += diagnostics['u'] * points; values[1] += diagnostics['v'] * points; values[2] += points
             validation_row = dict(update=update, **validation)
             if config.get('flow'):
                 validation_row.update(stage=stage, fm=val_fm if stage == 'flow' else '')
@@ -218,6 +251,10 @@ def train(args):
                     for name in LOSS_NAMES:
                         if name != 'field':
                             validation_row[name] = ''
+            validation_row.update({f'validation_{pde}': values[0] / values[1] if values[1] else ''
+                                   for pde, values in validation_fields.items()})
+            validation_row.update({f'validation_{pde}_{channel}': values[i] / values[2] if values[2] else ''
+                                   for pde, values in validation_waves.items() for i, channel in enumerate(('u', 'v'))})
             csv_row(run / 'validation.csv', validation_row)
             selection_loss = val_fm if stage == 'flow' else validation['field']
             improved = selection_loss < best

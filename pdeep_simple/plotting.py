@@ -157,13 +157,62 @@ def loss_plots(run, out):
             ax.legend()
         ax.grid(alpha=.2)
     fig.tight_layout(); fig.savefig(out / 'losses.png', dpi=150); plt.close(fig)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    for pde in PDES:
-        records = [r for r in train if r.get(f'field_{pde}')]
-        if records:
-            ax.plot([int(r['update']) for r in records], [float(r[f'field_{pde}']) for r in records], label=pde)
-    ax.set_xlabel('update'); ax.set_ylabel('normalized field MSE'); ax.legend(); ax.grid(alpha=.2)
-    fig.tight_layout(); fig.savefig(out / 'losses_by_pde.png', dpi=150); plt.close(fig)
+    field_loss_plots([run], out)
+
+
+def field_loss_plots(runs, out):
+    """Existing normalized field diagnostics, separated by PDE and flow stage."""
+    logs = []
+    for index, run in enumerate(runs):
+        for filename, split in (('train.csv', 'train'), ('validation.csv', 'validation')):
+            if not (run / filename).exists():
+                continue
+            rows = read_csv(run / filename)
+            for stage in ('deterministic', 'ae', 'flow'):
+                selected = [r for r in rows if r.get('stage', 'deterministic') == stage]
+                if selected:
+                    logs.append((index, run.name, split, stage, selected))
+    def present(rows, key):
+        return [r for r in rows if r.get(key) not in (None, '') and np.isfinite(float(r[key]))]
+    def draw(ax, train_key, validation_key, quantity='', color_offset=0, colors_per_run=1):
+        for index, name, split, stage, records in logs:
+            key = train_key if split == 'train' else validation_key
+            rows = present(records, key)
+            if not rows or key == 'kinematic' and not any(float(r[key]) for r in rows):
+                continue
+            stage_label = '' if stage == 'deterministic' else ' AE' if stage == 'ae' else ' flow sample mean'
+            style = '-' if split == 'train' else ':' if stage == 'flow' else '--'
+            ax.plot([int(r['update']) for r in rows], [float(r[key]) for r in rows], style,
+                    color=f'C{(colors_per_run * index + color_offset) % 10}', marker='o' if len(rows) == 1 else None,
+                    label=f'{name} {split}{stage_label}{quantity}')
+    def finish(ax, title, ylabel):
+        ax.set_title(title); ax.set_xlabel('optimizer update'); ax.set_ylabel(ylabel)
+        ax.set_yscale('symlog', linthresh=1e-5); ax.grid(alpha=.2)
+        if ax.lines:
+            ax.legend(fontsize=7, ncol=2 if len(ax.lines) > 6 else 1)
+        else:
+            ax.text(.5, .5, 'Diagnostics not recorded', transform=ax.transAxes, ha='center')
+    pdes = [pde for pde in PDES if any(present(rows, f'field_{pde}' if split == 'train' else f'validation_{pde}')
+                                     for _, _, split, _, rows in logs)]
+    if pdes:
+        columns = min(3, len(pdes)); rows = (len(pdes) + columns - 1) // columns
+        fig, axes = plt.subplots(rows, columns, squeeze=False, figsize=(6 * columns, 3.8 * rows))
+        for ax, pde in zip(axes.flat, pdes):
+            draw(ax, f'field_{pde}', f'validation_{pde}')
+            finish(ax, pde, 'normalized field MSE')
+        for ax in list(axes.flat)[len(pdes):]:
+            ax.axis('off')
+        fig.tight_layout(); fig.savefig(out / 'losses_by_pde.png', dpi=150); plt.close(fig)
+    waves = [pde for pde in WAVES if pde in pdes]
+    if waves:
+        fig, axes = plt.subplots(1, len(waves) + 1, squeeze=False, figsize=(7 * (len(waves) + 1), 4))
+        for ax, pde in zip(axes[0], waves):
+            for index, quantity in enumerate(('u', 'v')):
+                draw(ax, f'field_{pde}_{quantity}', f'validation_{pde}_{quantity}', f' {quantity}', index, 2)
+            finish(ax, f'{pde}: displacement u / velocity v', 'normalized reconstruction MSE')
+        draw(axes[0, -1], 'kinematic', 'kinematic')
+        finish(axes[0, -1], 'Kinematic consistency (separate loss)', 'unweighted kinematic loss')
+        fig.tight_layout(); fig.savefig(out / 'wave_losses.png', dpi=150); plt.close(fig)
 
 
 def reconstruction_plots(directory, out, maximum):

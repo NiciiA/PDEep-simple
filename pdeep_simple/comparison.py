@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from .data import case_paths, load_case, normalization
 from .training import load_checkpoint, model_from_config, select_device
 from .evaluation import evaluate_case, write_rows
-from .plotting import field_panel, read_csv, comparison_plots
+from .plotting import field_panel, read_csv, comparison_plots, field_loss_plots
 from .baselines import METHODS
 
 
@@ -80,6 +80,7 @@ def multiple_loss_plots(runs, out):
         else:
             ax.text(.5, .5, 'No applicable loss records', transform=ax.transAxes, ha='center')
     fig.tight_layout(); fig.savefig(out / 'loss_comparison.png', dpi=140); plt.close(fig)
+    field_loss_plots(runs, out)
 
 
 def solution_comparison(records, out, mode):
