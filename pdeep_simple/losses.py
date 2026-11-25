@@ -99,7 +99,7 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
     if weights['aux'] and case['meta']['tier'] == 'T2':
         label = np.log(case['meta']['coefficient'])
         parts['aux'] = (context['log_coefficient'] - label) ** 2
-    # E/H undamped wave branches define v = du/dt; their kinematic term is zero.
+    # E's wave branches (and H's undamped wave) define v = du/dt exactly.
     if weights['kinematic'] and channels == 2 and 'wave_initial' not in context:
         du = derivative(prediction, queries['coords'], 0) * scale[0]
         parts['kinematic'] = ((du / scale[1] - prediction[:, 1]) ** 2).mean()

@@ -138,26 +138,87 @@ D reuses A's encoder and attention decoder. A already has five fixed Fourier ban
 ### E-Geo
 
 ```bash
-python -m pdeep_simple train --data data/g1_small --model E --size s \
-  --wave-modes 32 --modes forward,inverse,hybrid --loss field=1 \
-  --updates 400 --batch 2 --queries 512 --device auto --run runs/e_initial
+python -u -m pdeep_simple train --data data/colab_g2 --model E --size m \
+  --wave-modes 64 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 2500 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_e_evolution
 ```
 
-E shares A's backbone. Every undamped `wave` case uses initial-condition-aware evolution, including when the operator is hidden. Initial displacement and velocity are supplied when known and inferred by the existing initial-state head when hidden. Hybrid masks retain each known initial node and infer the rest; P1 interpolation evaluates these fields at arbitrary query locations. One E model handles Forward, Inverse and Hybrid. Hidden targets never construct the operator or initial fields at inference.
+E shares A's conditioning backbone and uses initial-state-aware evolution for every genuinely time-dependent PDE in this project. Initial temperature, or wave displacement and velocity, are supplied when known and inferred by the existing initial-state head when hidden. Hybrid masks retain each known initial node and infer the rest; P1 interpolation evaluates these fields at arbitrary query locations. One E model handles Forward, Inverse and Hybrid. Hidden targets never construct the operator or initial fields at inference.
+
+| PDE | Evolution |
+|---|---|
+| `heat` | Mass-normalized FEM diffusion modes decay as `exp(-lambda*t)`. |
+| `wave` | Existing analytic oscillation, forcing and initial-state-aware wave decoder. |
+| `damped_wave` | The same spatial modes with `q'' + gamma*q' + omega^2*q = F(t)`. |
+| `reaction_diffusion` | Diffusion modes plus the actual dataset reaction `R(u) = -rho*u`. |
+| `poisson`, `diffusion`, `elliptic_adr`, `semilinear`, `p_laplacian`, `eikonal` | Existing coordinate decoder; these equations are stationary. |
+
+Heat and reaction-diffusion use `u = u0 + Phi*(q(t)-q(0)) + t*r(t)`, where r is A's existing coordinate decoder and t is physical time from the initial state. Diffusivity is included in the stiffness eigenvalues once. Constant forcing uses `(1-exp(-lambda*t))/lambda`, with its zero-rate limit; the dataset's cosine forcing uses its corresponding analytic convolution. Reaction-diffusion currently has a **linear sink**, not a nonlinear reaction: `Phi^T M R(Phi*q) = -rho*q`, so the exact reduced rates are `lambda + rho`. There is no additional nonlinear solver or invented reaction function.
 
 The wave decoder uses `u = u0 + t*v0 + t^2*r(t)`, where t is physical time relative to the initial time. When the positive spatial operator is fully known, it adds `u_m(t) - u_m(0) - t*v_m(0)` from the existing mass-normalized FEM modes. Their analytic evolution retains constant/cosine forcing, including resonance; fully known initial fields and forcing are projected, while hidden modal coefficients are inferred from conditioning. Unknown operators simply omit this contribution and still use the initial-aware decoder.
 
-Velocity is the physical-time derivative of displacement, using analytic modal derivatives and autograd for A's residual decoder, with separate u/v output scales. The chosen initial fields are exact at t=0 up to interpolation and floating-point accuracy. Training puts one quarter of E wave queries at the initial time (at least one), supervising both u and v through the usual reconstruction loss; validation draws stay unchanged. The redundant kinematic penalty is skipped for this branch and logged as zero; the existing finite-difference evaluation diagnostic remains available and need not be zero on coarse time grids. Inferred initial fields can still be wrong, and the construction does not enforce the full wave equation or boundary conditions. Other optional physics losses keep their existing definitions.
+Damped wave uses this same anchored displacement/velocity construction. One differentiable 4x4 matrix exponential per mode advances displacement, velocity and the cosine-forcing clock on 64 intervals per case. It handles underdamped, critically damped and overdamped dynamics, including forcing resonance. Cubic Hermite interpolation reuses that trajectory at arbitrary query times; its derivative supplies modal velocity. The undamped wave formula above is unchanged.
 
-Other PDEs and `damped_wave` retain A's ordinary decoder. Modes keep their existing interpolation and per-mesh/operator/device memory cache, using O(nodes × modes) storage per operator; resume rebuilds the cache. Only low modes are computed (at most interior degrees of freedom minus one, except a single interior node). No dataset preparation or new parameters are needed. Use a new run directory for this changed E wave behavior. D/E retain normal device, resume and staged-training support; `--flow` remains limited to A/C.
+Wave velocity is the physical-time derivative of displacement, using modal derivatives and autograd for A's residual decoder, with separate u/v output scales. Chosen initial fields are exact at t=0 up to interpolation and floating-point accuracy. Training puts one quarter of E's time-dependent queries at the initial time (at least one); validation draws stay unchanged. The redundant kinematic penalty is skipped for both E wave branches and logged as zero; the existing finite-difference evaluation diagnostic remains available and need not be zero on coarse time grids. Inferred initial fields can still be wrong, and these constructions do not enforce the full PDE or boundary conditions. Other optional physics losses retain their definitions, including with `--staged`.
+
+All four dynamic branches retain their initial-aware learned evolution when an operator is unavailable. With `--infer-operator`, hidden T2 scalar diffusivity/speed uses the existing positive coefficient head and cached unit-operator geometry modes: rates scale by alpha for diffusion and squared frequencies by c^2 for waves. Known coefficients remain fixed. Without that option, unavailable modal contributions are omitted. The compact latent, assimilation and flow additions below remain specific to undamped waves.
+
+`--wave-modes` controls the shared mode count for all four dynamic PDEs. Modes keep the existing per-mesh/operator/device cache, using O(nodes × modes) storage per operator; resume rebuilds it. Only low modes are computed (at most interior degrees of freedom minus one, except a single interior node). The evolution extension adds no parameter keys; existing weights still load strictly, and undamped wave and stationary predictions remain unchanged. Heat, reaction-diffusion and damped-wave decoding has changed, so train in a new run directory for comparisons. Architectural settings are restored on resume.
+
+E has four optional additions for undamped inverse waves. None enables the others automatically:
+
+| Flag | Effect |
+|---|---|
+| `--initial-latent 32` | Infer one compact initial-state vector; 16 also works. A small shared coordinate/geometry decoder reconstructs nodal u0/v0 on variable meshes, then uses the existing modal projections and evolution. Known initial nodes bypass this reconstruction exactly. |
+| `--assimilation` | Correct unknown initial-state components using a diagonal modal prior, actual sensor coordinates/times, u/v quantity and normalized noise. The small Gaussian update uses `torch.linalg.solve` and the complete predicted observation, including fixed forcing and learned residual. No observations means no correction. |
+| `--infer-operator` | For hidden T2 constant wave speed/diffusivity, reuse the positive coefficient head with cached geometry-only FEM modes. Reduced mass is I; stiffness is scaled by c^2 for waves or alpha for diffusion. Gradients reach the head without recomputing eigenmodes for each prediction. Known parameters remain fixed. |
+| `--flow --initial-latent 32` | Reuse the existing AE/FM stages, velocity MLP, Gaussian noise, linear matching path and Heun sampler for the initial-state latent. One sample defines a complete u/v trajectory; known components bypass samples. Add `--assimilation` to correct each sampled trajectory. |
+
+The compact encoder sees complete initial fields only as representation-training targets. In deterministic training, a mass-weighted normalized initial-state reconstruction loss (weight 1, logged as `initial_reconstruction`) accompanies the existing selected field/physics losses. Conditional inference uses only observations and masked known inputs. E flow first learns the initial representation and E decoder, then freezes them and trains the existing conditional flow; `--initial-latent` controls E's dimension rather than `--latent-dim`. Its flow stage uses only undamped wave cases, while non-wave decoding remains deterministic. Both training and validation splits must contain waves. Staged physics regularization remains available for deterministic E and cannot be combined with flow.
+
+For Colab, use the usual dataset and CUDA settings, with separate runs:
 
 ```bash
-python -m pdeep_simple eval --data data/g1_small --run runs/d --device auto
-python -m pdeep_simple eval --data data/g1_small --run runs/e_initial --device auto
-python -m pdeep_simple plot --run runs/e_initial --what losses,fields
+# Compact deterministic initial state
+python -u -m pdeep_simple train --data data/colab_g2 --model E --size m \
+  --wave-modes 64 --initial-latent 32 --modes forward,inverse,hybrid \
+  --loss field=1 --updates 2500 --batch 16 --queries 4096 \
+  --observations 0,8,16,32,64,128 --noise .01 --seed 42 \
+  --validate-every 500 --device cuda --run runs/colab_e_latent
+
+# Independent correction experiment, using the original initial-state heads
+python -u -m pdeep_simple train --data data/colab_g2 --model E --size m \
+  --wave-modes 64 --assimilation --loss field=1 --updates 2500 \
+  --batch 16 --queries 4096 --validate-every 500 --device cuda --run runs/colab_e_assimilation
+
+# Conditional initial-state flow; correction and operator inference stay optional
+python -u -m pdeep_simple train --data data/colab_g2 --model E --size m \
+  --wave-modes 64 --initial-latent 32 --flow --ae-updates 1000 \
+  --flow-steps 16 --loss field=1 --updates 2500 --batch 16 --queries 4096 \
+  --validate-every 500 --device cuda --run runs/colab_e_flow
 ```
 
-Evaluation keeps the existing metrics and grid/refinement options. E records `modal_wave` (0/1) and the actual `wave_modes` count per case; `summary.csv` averages `modal_wave` into the fraction using FEM modes within each PDE/geometry/conditioning/sensor group. Plotting saved E wave cases writes an `*_e_wave.png` panel with FEM and predicted u/v and absolute errors, labeled with or without modes. Use `plot --runs runs/a runs/c runs/d runs/e_initial` for the usual comparison.
+For the scalar-operator experiment, add `--infer-operator` to an E command and train on existing **T2 time-dependent** data, with `--loss field=1,aux=.1` if coefficient supervision is wanted. Adding this flag to G1 data does not hide its already supplied speed/diffusivity. It can also be used without a compact latent or assimilation.
+
+```bash
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_e_flow \
+  --pdes wave --limit 1 --modes forward,inverse,hybrid --observations 16 \
+  --samples 8 --save-samples 4 --flow-steps 16 --device cuda
+python -m pdeep_simple plot --run runs/colab_e_flow --what fields,uncertainty
+```
+
+Evaluation retains the existing normalized/physical field errors and `initial_rmse`, and adds observation u/v, normalized and noise-weighted RMSE before/after correction, inferred/true T2 coefficient errors, and `initial_sample_std_mean` for compact flow samples. The correction minimizes noise-weighted discrepancy; individual channel errors or normalized field errors can increase. Saved fields include individual samples, mean, standard deviation and reference at five physical times by default. `eval --assimilation` / `--no-assimilation` and `--infer-operator` / `--no-infer-operator` override those two settings without modifying checkpoint weights, and save separate selected evaluations. The existing `--pdes`, `--limit` and `--modes` filters still apply.
+
+These are research approximations. Truncation leaves unresolved spatial components to the residual; a compact latent may lose further detail. The 64-interval damped trajectory has interpolation error, especially for rapid dynamics. The current dataset supplies scalar constant damping and reaction; spatial damping matrices and nonlinear reactions are not implemented by the dataset or this extension. Only hidden T2 **constant scalar** speed/diffusivity is inferred; unavailable spatial operators retain the initial-aware learned fallback. The undamped-wave Gaussian correction is conditional on a fixed residual/operator with a unit diagonal prior in normalized modal increments; it can leave the compact decoder's latent manifold. Noise variance has a 1e-6 normalized floor. Unknown c uses one bounded, regularized observation-consistency step with a decrease check, rather than an exact parameter posterior. Assimilation without an available modal operator records errors but skips correction. Flow samples represent learned initial-state uncertainty, not sampled forcing/operator uncertainty or calibrated Bayesian uncertainty; variation and lower mean MSE are not guaranteed. Modal FEM construction stays cached on CPU. The small assimilation solve and damped matrix exponential use CPU fallbacks for MPS where needed, retaining gradients.
+
+```bash
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_e_evolution \
+  --pdes heat,wave --limit 3 --modes forward,inverse,hybrid --device cuda
+python -m pdeep_simple plot --run runs/colab_e_evolution --what losses,fields
+```
+
+Evaluation keeps the existing metrics and grid/refinement options. For E's time-dependent PDEs, default evaluation/field plots show physical times 0, .25, .5, .75 and 1, interpolating stored FEM references as needed. E records `modal_evolution`, `initial_aware_evolution`, `evolution_rule`, and the actual `wave_modes` count for every PDE. The existing `modal_wave` diagnostic and `*_e_wave.png` undamped-wave panel remain available. Use the normal `plot --runs` comparisons across separate runs.
 
 ### F-Geo: learned PDE evolution
 
@@ -250,13 +311,13 @@ Both CSVs record `stage=field` or `stage=physics`; physics terms are zero during
 | `--modes` | Conditioning modes sampled during training |
 | `--loss` | Weighted terms, e.g. `field=1,aux=.1`; choose only applicable terms |
 | `--device` | `auto,cpu,cuda,mps`; Colab notebook training explicitly uses `cuda` |
-| `--flow` | Field representation stage followed by conditional latent flow matching |
-| `--ae-updates`, `--latent-dim` | First-stage updates and latent dimension; require 1 <= AE updates < total updates |
+| `--flow` | Field representation stage followed by conditional latent flow matching (A/C, or E with `--initial-latent`) |
+| `--ae-updates`, `--latent-dim` | First-stage updates and A/C latent dimension; E uses `--initial-latent`; require 1 <= AE updates < total updates |
 | `--resume` | Restore `last.pt`, including model, optimizer, RNG and saved stage settings |
 
 `--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the attention models A/D/E/F/G/H. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
 
-Flow's **total** `--updates` includes both stages: the examples use 100 representation updates and 300 flow updates. First train a reference-field encoder and latent-conditioned A/C decoder; then freeze that representation and train a conditional velocity MLP using training-only latent normalization. Physical PDE time and latent ODE flow time are different variables. Inference uses known inputs and observations, never the reference encoder. One latent describes the entire space-time field, including wave u/v, and is reused across query chunks.
+Flow's **total** `--updates` includes both stages: the A/C examples use 100 representation updates and 300 flow updates. First train a reference-field encoder and latent-conditioned A/C decoder (or the compact initial-state representation and E decoder); then freeze that representation and train a conditional velocity MLP using training-only latent normalization. Physical PDE time and latent ODE flow time are different variables. Inference uses known inputs and observations, never the reference encoder. One latent describes the entire space-time field, including wave u/v, and is reused across query chunks.
 
 `best.pt` uses validation field loss for deterministic models and validation flow-matching loss after entering the flow stage. Sampling rejects an AE-only checkpoint. Flow samples form a learned conditional distribution, **not automatically calibrated Bayesian uncertainty**. Extend a completed run with the normal resume command:
 
@@ -304,6 +365,18 @@ python -m pdeep_simple eval --data data/g1_small --run runs/a_flow --split test 
 ```
 
 Use the same commands for `runs/c` and `runs/c_flow`. Fixed draws give every method identical observations for the same case, seed and count; sensor sets are not nested across counts. Noise is independent Gaussian with absolute std `--noise` (default .01), including velocity. Evaluation saves per-case `metrics.csv`, grouped `summary.csv`, settings, skipped cases and selected field NPZs. Filters include `--pde`, `--geometries`, `--modes` and `--max-cases`; `--frames` selects stored physical times (default five).
+
+For a quick look at a few wave cases:
+
+```bash
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_e \
+  --pdes wave --limit 3 --modes forward,inverse,hybrid --device mps
+python -m pdeep_simple plot --run runs/colab_e --what fields
+```
+
+`--pdes` also accepts comma-separated names such as `wave,heat,diffusion`. `--limit` is an alias for `--max-cases`: it takes the first matching physical cases in manifest order, before loading fields or running inference. Selection is deterministic and independent of the model; modes and observation draws retain their existing meanings. A limit of three with all three modes evaluates three physical cases under each mode.
+
+Filtered neural evaluations use a fresh `evaluations/selection_*` folder inside the run (`--out`, if supplied, is the parent instead), preserving previous full results in `evaluation/`. Existing `evaluation.json` records the selected case paths, and filtered runs save all selected predictions by default; `--save-cases` can explicitly reduce this. Plotting the run uses its most recent default full or selected evaluation, without inference. Filtered field plots include each saved case/mode at its largest saved observation count, use all groups unless `--max-fields` limits them, and save inside that selection's `plots/` folder. Custom output folders can be plotted directly with `plot --run PATH --what fields`. Selected wave runs use five uniform physical times by default (0, .25, .5, .75, 1), with existing FEM time interpolation for references; u/v are plotted separately on the same domain and shared reference/prediction colour limits.
 
 Errors use lumped spatial weights and trapezoidal time weights. `mse`/`rmse` are physical-unit errors; `normalized_mse=MSE/s_u^2` and `normalized_rmse=RMSE/s_u` use fixed **training-set RMS** with a .01 floor, separately for u/v. Relative L2 divides by reference energy and can be large near zero fields. Aggregates average per-case errors. Baselines should use `--normalization-run` matching the neural run, especially for geometry-family holdouts (`train --geometries square,disk`). No held-out magnitude sets an input scale.
 

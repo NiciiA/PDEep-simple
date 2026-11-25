@@ -32,7 +32,10 @@ def parser():
     for name in ('width', 'layers', 'heads', 'memory'):
         train.add_argument('--' + name, type=int, help='Manual preset override')
     train.add_argument('--fourier-bands', type=int, default=6, help='D/G-Geo decoder frequency bands')
-    train.add_argument('--wave-modes', type=int, default=32, help='E-Geo low-frequency FEM wave modes')
+    train.add_argument('--wave-modes', type=int, default=32, help='E-Geo FEM modes for wave, damped wave, heat and reaction-diffusion')
+    train.add_argument('--initial-latent', type=int, help='E-Geo compact initial-state dimension, e.g. 16 or 32')
+    train.add_argument('--assimilation', action='store_true', help='E-Geo noise-aware observation correction')
+    train.add_argument('--infer-operator', action='store_true', help='E-Geo reduced dynamics for unknown T2 scalar speed/diffusivity')
     train.add_argument('--evolution-steps', type=int, default=32, help='F-Geo trajectory steps over the physical interval')
     train.add_argument('--siren-omega', type=float, default=30., help='G-Geo sinusoidal activation frequency')
     train.add_argument('--green-sources', type=int, default=64, help='H-Geo spatial quadrature samples')
@@ -63,15 +66,24 @@ def parser():
         sub.add_argument('--noise', type=float, default=.01); sub.add_argument('--seed', type=int, default=123)
         sub.add_argument('--frames', type=int, default=5, help='Stored times for quadrature and finite-difference diagnostics')
         sub.add_argument('--geometries', help='Restrict evaluation families, e.g. lshape')
-        sub.add_argument('--save-cases', type=int, default=3, help='Saved prediction cases per PDE')
+        sub.add_argument('--save-cases', type=int, default=3 if name == 'baseline' else None,
+                         help='Saved prediction cases per PDE; default 3, or all for filtered eval')
         sub.add_argument('--chunk', type=int, default=512, help='Neural query chunk size')
         sub.add_argument('--grids', help='Comma-separated bounding-box grid sizes, e.g. 128,256,512; default FEM nodes')
-        sub.add_argument('--max-cases', type=int, help='Limit selected physical cases; grid evaluation defaults to at most eight')
-        sub.add_argument('--pde', choices=PDES)
+        limit_flags = ('--max-cases', '--limit') if name == 'eval' else ('--max-cases',)
+        sub.add_argument(*limit_flags, type=int, dest='max_cases', help='Limit physical cases after filtering; manifest order, independent of model')
+        pde_filter = sub.add_mutually_exclusive_group()
+        pde_filter.add_argument('--pde', choices=PDES)
+        if name == 'eval':
+            pde_filter.add_argument('--pdes', help='Comma-separated PDE names, e.g. wave,heat,diffusion')
         sub.add_argument('--refine', type=int, default=0, help='Red-refinement levels for reference only; requires explicit --max-cases')
         sub.add_argument('--out', required=name == 'baseline')
         if name == 'eval':
             sub.add_argument('--run', required=True); sub.add_argument('--checkpoint', default='best.pt', choices=['best.pt', 'last.pt'])
+            sub.add_argument('--assimilation', action=argparse.BooleanOptionalAction, default=None,
+                             help='Override E checkpoint correction setting without changing its weights')
+            sub.add_argument('--infer-operator', action=argparse.BooleanOptionalAction, default=None,
+                             help='Override E checkpoint scalar-operator setting')
         else:
             sub.add_argument('--workers', default='1', help='Positive process count or auto (at most four)')
             sub.add_argument('--memory-gb', type=float, default=2., help='Conservative total worker memory budget; auto also respects available RAM')
@@ -105,7 +117,8 @@ def parser():
     plot.add_argument('--frames', type=int, default=3)
     plot.add_argument('--chunk', type=int, default=512)
     plot.add_argument('--device', choices=['auto', 'cpu', 'mps', 'cuda'], default='auto')
-    plot.add_argument('--max-fields', type=int, default=9); plot.add_argument('--out')
+    plot.add_argument('--max-fields', type=int, help='Maximum field plots; default 9, or all selected case/mode groups')
+    plot.add_argument('--out')
     for sub in (commands.choices['eval'], plot):
         sub.add_argument('--samples', type=int, default=32, help='Whole-field flow samples, never independent query noise')
         sub.add_argument('--flow-steps', type=int, default=32, help='Heun flow ODE steps')

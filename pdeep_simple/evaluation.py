@@ -7,12 +7,13 @@ import subprocess
 import sys
 import multiprocessing
 import time
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 import numpy as np
 import torch
 from .data import (case_paths, load_case, normalization, observations, model_input, query_input,
-                   known_inputs, MODES)
+                   known_inputs, MODES, PDES)
 from .geometry import node_weights, evaluation_grid, interpolate, refine_mesh
 from .physics import assemble, solve, WAVES, PARABOLIC, LINEAR_ELLIPTIC
 from .geometry import element_geometry
@@ -171,6 +172,8 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
     device = context['global_h'].device
     with torch.no_grad():
         latent_contexts = [model.with_latent(context, z) for z in latents] if latents is not None else [context]
+    from .wave import initial_diagnostics
+    diagnostics = initial_diagnostics(latent_contexts)
     size = (len(coords), 2)
     mean = np.empty(size, np.float32)
     std = np.full(size, np.nan, np.float32); lower = std.copy(); upper = std.copy()
@@ -189,7 +192,7 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
                 if len(fields) > 1:
                     std[start:stop] = fields.std(0, ddof=1)
                     lower[start:stop], upper[start:stop] = np.quantile(fields, [(1 - interval) / 2, (1 + interval) / 2], axis=0)
-    return mean, dict(sample_std=std, lower=lower, upper=upper, sample_fields=kept)
+    return mean, dict(sample_std=std, lower=lower, upper=upper, sample_fields=kept, diagnostics=diagnostics)
 
 
 def classical_values(prepared, case, coords, chunk, interval=.9):
@@ -215,6 +218,10 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
         write_rows(out / f'refinement_{path.stem}.csv', reference['refinement_rows'])
     indices = np.unique(np.linspace(0, len(case['times']) - 1, min(options['frames'], len(case['times']))).round().astype(int))
     times = case['times'][indices]; tw = time_weights(times)
+    if (options.get('filtered') and pde in WAVES or
+            model_config and model_config.get('model') == 'E' and pde in PARABOLIC + WAVES):
+        times = np.linspace(case['times'][0], case['times'][-1], options['frames'])
+        tw = time_weights(times)
     draw_seed = int(np.random.SeedSequence([options['seed'], meta['seed']]).generate_state(1)[0])
     nodal_coords = np.concatenate([np.column_stack([case['nodes'], np.full(len(case['nodes']), t)]) for t in times])
     rows, skipped, cache = [], [], {}
@@ -245,14 +252,17 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                         context = model.encode(inputs)
                         if model_config and model_config.get('model') == 'E':
                             basis = context.get('wave')
-                            extra.update(modal_wave=basis is not None,
-                                         initial_aware_wave='wave_initial' in context,
-                                         wave_modes=len(basis['omega']) if basis is not None else 0)
+                            extra.update(modal_wave=pde in WAVES and basis is not None,
+                                         initial_aware_wave=pde in WAVES and 'wave_initial' in context,
+                                         wave_modes=len(basis['omega']) if basis is not None else 0,
+                                         modal_evolution=basis is not None,
+                                         initial_aware_evolution='wave_initial' in context,
+                                         evolution_rule=context.get('evolution_kind', 'wave' if pde == 'wave' else 'coordinate'))
                         if samples:
                             latents = model.sample_latents(context, samples, options['flow_steps'], draw_seed)
                         if meta['tier'] == 'T2':
                             coefficient = float(torch.stack([model.with_latent(context, z)['log_coefficient'].exp()
-                                                             for z in latents]).mean().cpu()) if samples else float(context['log_coefficient'].exp().cpu())
+                                                             for z in latents]).mean().cpu()) if samples and not getattr(model, 'initial_only', False) else float(context['log_coefficient'].exp().cpu())
                 sync(device); setup_seconds = time.perf_counter() - started
                 started = time.perf_counter()
                 if model is None:
@@ -262,9 +272,25 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                             latents, options['save_samples'], options['interval'])
                 sync(device); nodal_seconds = time.perf_counter() - started
                 nodal = nodal.reshape(len(times), -1, 2)
+                extra.update(nodal_spread.get('diagnostics', {}))
+                coefficient = extra.get('coefficient_prediction', coefficient)
                 diagnostics = residual_diagnostics(case, nodal, times, mode, draw_seed, coefficient)
+                if model_config and model_config.get('model') == 'E':
+                    if any(model_config.get(key) for key in ('initial_latent', 'assimilation', 'infer_operator')):
+                        diagnostics.setdefault('operator_inferred', 0.)
+                    if model_config.get('assimilation'):
+                        diagnostics.setdefault('assimilation_applied', 0.)
+                        # Keep CSV columns stable for zero sensors and non-wave cases.
+                        for when in ('before', 'after'):
+                            for quantity in ('normalized', 'noise_weighted', 'u', 'v'):
+                                diagnostics.setdefault(f'observation_{quantity}_rmse_{when}', np.nan)
+                diagnostics.update({key: value for key, value in nodal_spread.get('diagnostics', {}).items()
+                                    if key != 'coefficient_prediction'})
                 if 'modal_wave' in extra:
-                    diagnostics.update(modal_wave=int(extra['modal_wave']), wave_modes=extra['wave_modes'])
+                    diagnostics.update(modal_wave=int(extra['modal_wave']), wave_modes=extra['wave_modes'],
+                                       modal_evolution=int(extra['modal_evolution']),
+                                       initial_aware_evolution=int(extra['initial_aware_evolution']),
+                                       evolution_rule=extra['evolution_rule'])
                 boundary = np.sqrt(np.mean(nodal[:, case['boundary_nodes']] ** 2, axis=(0, 1)))
                 initial = np.sqrt(np.average((nodal[0] - interpolate(reference, nodal_coords[:len(case['nodes'])])) ** 2,
                                              axis=0, weights=node_weights(case))) if len(case['times']) > 1 else np.full(2, np.nan)
@@ -299,6 +325,9 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                       coefficient_true=meta['coefficient'] if meta['tier'] == 'T2' else np.nan,
                                       coefficient_absolute=abs(coefficient - meta['coefficient']) if coefficient is not None else np.nan,
                                       **diagnostics, **{key: extra.get(key, '' if key == 'map_message' else np.nan) for key in MAP_STATS})
+                        if model_config and model_config.get('model') == 'E' and model_config.get('initial_latent'):
+                            initial_std = nodal_spread['sample_std'].reshape(nodal.shape)[0, :, channel]
+                            common['initial_sample_std_mean'] = float(np.average(initial_std, weights=node_weights(case))) if np.isfinite(initial_std).all() else np.nan
                         for it in [None] + list(range(len(times))):
                             pred, target = (field[:, :, channel], truth[:, :, channel]) if it is None else (field[it, :, channel], truth[it, :, channel])
                             w = weights if it is None else spatial
@@ -322,11 +351,14 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                       sample_std=std.astype(np.float32), lower=lower.astype(np.float32), upper=upper.astype(np.float32),
                                       sample_fields=kept.astype(np.float32), observation_queries=obs['queries'],
                                       observation_quantity=obs['quantity'], observation_values=obs['values'], observation_noise=obs['noise'],
-                                      metadata=np.array(json.dumps(dict(meta, mode=mode, count=count, method=method, grid=grid,
+                                      metadata=np.array(json.dumps(dict(meta, case=path.name, mode=mode, count=count, method=method, grid=grid,
                                                                         refine=options['refine'], samples=samples, interval=options['interval'],
                                                                         posterior=extra.get('posterior', 'empirical flow, uncalibrated' if samples else 'none'),
                                                                         pod_rank=extra.get('pod_rank'),
-                                                                        **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave') if key in extra},
+                                                                        **{key: model_config[key] for key in ('initial_latent', 'assimilation', 'infer_operator')
+                                                                           if model_config and model_config.get(key)},
+                                                                        **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave',
+                                                                                                      'modal_evolution', 'initial_aware_evolution', 'evolution_rule') if key in extra},
                                                                         **{key: extra[key] for key in MAP_STATS if key in extra}))))
                         _, field_mask, _, scalar_mask = known_inputs(case, mode, np.random.default_rng(draw_seed))
                         arrays.update(known_field_mask=field_mask.astype(bool), known_scalar_mask=scalar_mask.astype(bool))
@@ -381,30 +413,52 @@ def baseline_workers(args, paths):
 
 
 def evaluate(args, baseline=False):
-    out = Path(args.out or (Path(args.run) / 'evaluation')); out.mkdir(parents=True, exist_ok=True)
+    modes = args.modes.split(',')
+    pdes = [p.strip() for p in args.pdes.split(',')] if getattr(args, 'pdes', None) else [args.pde] if args.pde else []
+    if any(p not in PDES for p in pdes):
+        raise ValueError(f'PDEs must be selected from {PDES}')
+    overrides = {key: getattr(args, key) for key in ('assimilation', 'infer_operator') if getattr(args, key, None) is not None}
+    filtered = not baseline and bool(pdes or args.max_cases is not None or args.geometries or overrides or
+                                     modes != list(MODES) or args.split != 'test')
+    base = Path(args.out or (Path(args.run) / ('evaluations' if filtered else 'evaluation')))
+    base.mkdir(parents=True, exist_ok=True)
+    out = Path(tempfile.mkdtemp(prefix='selection_', dir=base)) if filtered else base
+    save_cases = args.save_cases if args.save_cases is not None else (None if filtered else 3)
     grids = [int(g) for g in args.grids.split(',')] if args.grids else [0]
-    if args.frames < 1 or args.chunk < 1 or args.save_cases < 0 or any(g < 3 and g != 0 for g in grids):
+    if args.frames < 1 or args.chunk < 1 or (save_cases is not None and save_cases < 0) or any(g < 3 and g != 0 for g in grids):
         raise ValueError('positive frames/chunk, nonnegative save-cases, grids >=3 required')
     if not 0 <= args.refine <= 3 or args.refine and args.max_cases is None:
         raise ValueError('--refine supports levels 0..3 and requires explicit --max-cases')
     if args.max_cases is not None and args.max_cases < 1:
         raise ValueError('max-cases must be positive')
     device = select_device(args.device); torch.set_num_threads(args.threads)
-    paths = case_paths(args.data, args.split, args.geometries.split(',') if args.geometries else None)
-    paths = [p for p in paths if not args.pde or load_case(p)['meta']['pde'] == args.pde]
-    limit = args.max_cases if args.max_cases is not None else (8 if args.grids else len(paths))
-    if len(paths) > limit:
-        print(f'Limiting evaluation to {limit} physical cases; use --max-cases to change this')
-    paths = paths[:limit]
+    root = Path(args.data); manifest = json.loads((root / 'manifest.json').read_text())
+    geometries = args.geometries.split(',') if args.geometries else []
+    limit = args.max_cases if args.max_cases is not None else (8 if args.grids else None)
+    paths = []
+    for entry in manifest['cases']:
+        if entry['split'] != args.split or geometries and entry['geometry'] not in geometries:
+            continue
+        path = root / entry['file']; pde = entry.get('pde')
+        if pdes and pde is None:  # Older manifests may lack the PDE tag.
+            with np.load(path, allow_pickle=False) as saved:
+                pde = json.loads(str(saved['metadata']))['pde']
+        if pdes and pde not in pdes:
+            continue
+        paths.append(path)
+        if limit is not None and len(paths) == limit:
+            break
     if not paths:
         raise ValueError('no matching evaluation cases')
-    modes = args.modes.split(','); counts = [int(n) for n in args.observations.split(',')]
+    if any(not p.exists() for p in paths):
+        raise ValueError('selected dataset cases are missing')
+    counts = [int(n) for n in args.observations.split(',')]
     if any(m not in MODES for m in modes) or min(counts) < 0 or args.noise <= 0:
         raise ValueError('valid modes, nonnegative counts, and positive Gaussian noise required')
     model = None; config = {}
     if not baseline:
         checkpoint = load_checkpoint(Path(args.run) / args.checkpoint, device)
-        config = checkpoint['config']; scales = checkpoint['scales']
+        config = dict(checkpoint['config'], **overrides); scales = checkpoint['scales']
         if config.get('flow') and checkpoint.get('stage') != 'flow':
             raise ValueError('this checkpoint has not reached flow training; resume it to finish both stages')
         if args.samples < 1 or args.flow_steps < 1 or args.save_samples < 0 or not 0 < args.interval < 1:
@@ -424,10 +478,12 @@ def evaluate(args, baseline=False):
             raise ValueError('positive POD rank/ridge, GP lengthscale/amplitude and MAP maxiter required')
         if 'pod' in methods:
             args.pod_model = fit_pod(args.data, args.pod_model or out / 'pod.npz', args.pod_rank)
-    options = dict(vars(args), modes=modes, observations=counts, grids=grids, device=device,
+    options = dict(vars(args), modes=modes, observations=counts, grids=grids, device=device, filtered=filtered, save_cases=save_cases,
                    samples=getattr(args, 'samples', 0), flow_steps=getattr(args, 'flow_steps', 0),
                    save_samples=getattr(args, 'save_samples', 0), interval=getattr(args, 'interval', .9))
-    (out / 'evaluation.json').write_text(json.dumps(dict(options, methods=methods, scales=scales, data=str(Path(args.data).resolve()),
+    (out / 'evaluation.json').write_text(json.dumps(dict(options, methods=methods, scales=scales,
+        model_options={key: config.get(key) for key in ('model', 'initial_latent', 'assimilation', 'infer_operator', 'flow')},
+        cases=[str(p.resolve()) for p in paths], data=str(Path(args.data).resolve()),
         reference='stored P1 fields' if not args.refine else 'refined FEM with prolonged original P1 physical inputs; observations unchanged',
         uncertainty='empirical flow intervals are not claimed calibrated; T1/G1 Gaussian elliptic Bayes exact only for stored discrete Gaussian model'), indent=2))
     # Per-case CSVs and appended metrics survive interruption. Final order is case order.
@@ -437,7 +493,7 @@ def evaluate(args, baseline=False):
         with np.load(path, allow_pickle=False) as saved:
             pde = json.loads(str(saved['metadata']))['pde']
         rank = ranks.get(pde, 0); ranks[pde] = rank + 1
-        save[path] = rank < args.save_cases
+        save[path] = save_cases is None or rank < save_cases
     started = time.perf_counter(); completed = 0
     def record(path, result):
         nonlocal completed

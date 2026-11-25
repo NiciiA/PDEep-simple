@@ -31,7 +31,7 @@ def uncertainty_plot(field, out, name):
     gp = field['meta']['method'] == 'gp'
     if not bayes and not gp and not field['meta'].get('samples'):
         return
-    count = min(2, len(field['sample_fields']))
+    count = min(4 if field['meta']['method'] == 'E-Flow' else 2, len(field['sample_fields']))
     for channel in range(2 if field['meta']['pde'] in WAVES else 1):
         truth, mean = field['reference'][:, :, channel], field['prediction'][:, :, channel]
         std = field['sample_std'][:, :, channel]

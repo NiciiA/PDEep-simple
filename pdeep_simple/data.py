@@ -482,6 +482,17 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
         result['forcing_frequency'] = physical.get('forcing_frequency', 0.)
     if case['meta']['pde'] == 'wave':
         result['quadrature_weights'] = node_weights(case)
+        result['wave_geometry'] = {key: case[key] for key in ('nodes', 'triangles', 'boundary_nodes')}
+        result['wave_scalar_operator'] = case['meta']['tier'] == 'T2'
+    if case['meta']['pde'] in PARABOLIC + ('damped_wave',):
+        result['evolution_geometry'] = {key: case[key] for key in ('nodes', 'triangles', 'boundary_nodes')}
+        result['evolution_scalar_operator'] = case['meta']['tier'] == 'T2'
+        # These scalar parameters are always supplied by the current conditioning rules.
+        result['reaction'] = physical.get('reaction', 0.)
+        result['damping'] = physical.get('damping', 0.)
+        if masks[:, 3].all() and not any(physical.get('advection', [0., 0.])):
+            coefficient = case['element_coefficient'][:, None] if 'element_coefficient' in case else values[:, 3]
+            result['evolution_operator'] = coefficient ** (2 if case['meta']['pde'] in WAVES else 1)
     if 'field_priors' in case['meta']:
         definitions, channels, parameters = [], [], []
         for channel, name in enumerate(('source', 'initial_u', 'initial_v', 'coefficient')):

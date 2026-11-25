@@ -13,12 +13,33 @@ class FieldEncoder(nn.Module):
         self.points = mlp(3 * width + 2, width, width)
         self.pool = mlp(2 * width, width, latent_dim)
 
-    def forward(self, coords, values):
+    def forward(self, coords, values, weights=None):
         h = self.coordinates(coords)
         # Coordinate/field products retain spatial structure under set pooling.
         features = torch.cat([h, h * values[:, :1], h * values[:, 1:2], values], -1)
         h = self.points(features)
-        return self.pool(torch.cat([h.mean(0), h.amax(0)]))
+        mean = h.mean(0) if weights is None else (h * weights[:, None]).sum(0) / weights.sum()
+        return self.pool(torch.cat([mean, h.amax(0)]))
+
+
+class InitialStateCodec(FieldEncoder):
+    """Variable-mesh initial fields, with one geometry-conditioned spatial basis."""
+    def __init__(self, width, latent_dim):
+        super().__init__(width, latent_dim)
+        self.latent_dim = latent_dim
+        self.spatial_basis = mlp(2 * width, width, 2 * latent_dim)
+        self.spatial_bias = mlp(2 * width, width, 2)
+
+    def geometry(self, nodes, bounds, weights, boundary):
+        coords = torch.cat([(nodes - bounds[0, :2]) / bounds[1, :2], torch.zeros_like(nodes[:, :1])], -1)
+        h = self.coordinates(coords)
+        pooled = (h * weights[:, None]).sum(0) / weights.sum()
+        return coords, torch.cat([h, pooled.expand(len(h), -1)], -1), 1 - boundary
+
+    def decode(self, geometry, latent):
+        _, features, free = geometry
+        basis = self.spatial_basis(features).reshape(-1, 2, self.latent_dim)
+        return ((basis * latent).sum(-1) / np.sqrt(self.latent_dim) + self.spatial_bias(features)) * free[:, None]
 
 
 class LatentFlow(nn.Module):
@@ -28,9 +49,13 @@ class LatentFlow(nn.Module):
             raise ValueError('latent-dim must be positive and latent-points at least eight')
         self.base = base
         width = base.coordinates.linear.out_features
-        self.field_encoder = FieldEncoder(width, latent_dim)
-        self.latent_condition = nn.Linear(latent_dim, width)
-        self.latent_basis = mlp(width, width, 2 * latent_dim)
+        self.initial_only = hasattr(base, 'initial_codec')
+        if self.initial_only:
+            latent_dim = base.initial_latent
+        else:
+            self.field_encoder = FieldEncoder(width, latent_dim)
+            self.latent_condition = nn.Linear(latent_dim, width)
+            self.latent_basis = mlp(width, width, 2 * latent_dim)
         self.velocity = nn.Sequential(nn.Linear(latent_dim + width + 3, width), nn.SiLU(),
                                       nn.Linear(width, width), nn.SiLU(), nn.Linear(width, latent_dim))
         self.latent_dim, self.latent_points = latent_dim, latent_points
@@ -38,10 +63,12 @@ class LatentFlow(nn.Module):
         self.register_buffer('latent_scale', torch.ones(latent_dim))
 
     def encode(self, inputs):
-        return self.base.encode(inputs)
+        return self.base.encode(inputs, correct=False) if self.initial_only else self.base.encode(inputs)
 
     def with_latent(self, context, latent):
         """One latent conditions the complete physical field, including u and v."""
+        if self.initial_only:
+            return self.base.with_initial_latent(context, latent)
         result = dict(context)
         shift = self.latent_condition(latent)
         result['global_h'] = context['global_h'] + shift
@@ -52,6 +79,8 @@ class LatentFlow(nn.Module):
         return result
 
     def decode(self, context, queries):
+        if self.initial_only:
+            return self.base.decode(context, queries)
         if 'latent' not in context:
             raise ValueError('flow decoding needs one latent for the whole field')
         h = self.base.coordinates(queries['coords'])
@@ -66,6 +95,8 @@ class LatentFlow(nn.Module):
 
     def reference_latent(self, case, scales):
         """Training/AE validation only. Inference never calls this function."""
+        if self.initial_only:
+            return self.base.reference_latent(case, scales)
         from .geometry import interpolate
         device = self.latent_mean.device
         rng = np.random.default_rng([case['meta']['seed'], 731])
@@ -80,8 +111,9 @@ class LatentFlow(nn.Module):
     def calibrate(self, cases, scales):
         with torch.no_grad():
             z = torch.stack([self.reference_latent(case, scales) for case in cases])
-            self.latent_mean.copy_(z.mean(0))
-            self.latent_scale.copy_(z.std(0, unbiased=False).clamp_min(.05))
+            values = z[[i for i, case in enumerate(cases) if case['meta']['pde'] == 'wave']] if self.initial_only else z
+            self.latent_mean.copy_(values.mean(0))
+            self.latent_scale.copy_(values.std(0, unbiased=False).clamp_min(.05))
         return z
 
     def set_stage(self, stage):

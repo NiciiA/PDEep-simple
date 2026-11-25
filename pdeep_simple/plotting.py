@@ -232,11 +232,15 @@ def field_loss_plots(runs, out):
 
 
 def reconstruction_plots(directory, out, maximum):
+    settings_path = directory / 'evaluation.json'
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    filtered = settings.get('filtered', False)
     selected = {}
     for path in sorted(directory.glob('*.npz')):
         with np.load(path, allow_pickle=False) as saved:
             meta = json.loads(str(saved['metadata']))
-        key = meta['pde'], meta['geometry'], meta['method']
+        key = ((meta['case'], meta['mode'], meta['method']) if filtered else
+               (meta['pde'], meta['geometry'], meta['method']))
         score = (meta['mode'] == 'inverse', meta['count'])
         if key not in selected or score > selected[key][0]:
             selected[key] = score, path
@@ -244,7 +248,8 @@ def reconstruction_plots(directory, out, maximum):
         with np.load(path, allow_pickle=False) as saved:
             case = {k: saved[k] for k in saved.files}
         meta = json.loads(str(case['metadata']))
-        times = case['times']; maximum_frames = 5 if meta['method'] in ('F-Geo', 'G-Geo', 'H-Geo') else 4
+        case_label = f'{meta["case"]} / ' if filtered else ''
+        times = case['times']; maximum_frames = 5 if filtered or meta['method'] in ('F-Geo', 'G-Geo', 'H-Geo', 'E-Flow') or meta.get('initial_aware_evolution') or meta.get('initial_latent') or meta.get('assimilation') or meta.get('infer_operator') else 4
         indices = np.unique(np.linspace(0, len(times) - 1, min(maximum_frames, len(times))).round().astype(int))
         for channel in range(2 if meta['pde'] in WAVES else 1):
             truth, prediction = case['reference'][:, :, channel], case['prediction'][:, :, channel]
@@ -263,7 +268,7 @@ def reconstruction_plots(directory, out, maximum):
                     keep = (case['observation_quantity'] == channel) & (abs(obs[:, 2] - t) <= (.16 if len(times) > 1 else 1e-6))
                     axes[row, col].scatter(*obs[keep, :2].T, facecolors='none', edgecolors='white', linewidths=.8, s=22)
             quantity = 'u' if channel == 0 else 'v'
-            fig.suptitle(f'{meta["pde"]} / {meta["geometry"]} / {meta["mode"]} / n={meta["count"]} / {quantity}')
+            fig.suptitle(f'{case_label}{meta["pde"]} / {meta["geometry"]} / {meta["mode"]} / n={meta["count"]} / {quantity}')
             fig.tight_layout(rect=(0, 0, 1, .96)); fig.savefig(out / f'{path.stem}_{quantity}.png', dpi=140); plt.close(fig)
         if meta['method'] == 'E-Geo' and meta['pde'] == 'wave':
             index = len(times) // 2
@@ -277,17 +282,28 @@ def reconstruction_plots(directory, out, maximum):
                                 limits if col < 2 else None, 'magma' if col == 2 else 'viridis')
             branch = (f'{meta["wave_modes"]} FEM modes + anchored residual' if meta.get('modal_wave') else
                       'initial-aware evolution' if meta.get('initial_aware_wave') else 'direct decoder')
-            fig.suptitle(f'E-Geo / {meta["mode"]} / t={times[index]:.3f} / {branch}')
+            fig.suptitle(f'{case_label}E-Geo / {meta["mode"]} / t={times[index]:.3f} / {branch}')
             fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(out / f'{path.stem}_e_wave.png', dpi=140); plt.close(fig)
+
+
+def evaluation_directory(run):
+    """Most recent default full/selected evaluation, or an explicit result directory."""
+    candidates = [run, run / 'evaluation'] + list((run / 'evaluations').glob('selection_*'))
+    candidates = [path for path in candidates if (path / 'evaluation.json').exists()]
+    if candidates:
+        return max(candidates, key=lambda path: (path / 'evaluation.json').stat().st_mtime_ns)
+    return run / 'evaluation' if (run / 'evaluation').is_dir() else run
 
 
 def comparison_plots(paths, out, metric='rmse'):
     records = []
     for path in paths:
         if path.is_dir():
-            path = path / 'metrics.csv' if (path / 'metrics.csv').exists() else path / 'evaluation' / 'metrics.csv'
+            path = evaluation_directory(path) / 'metrics.csv'
         if path.exists():
             label = path.parent.parent.name if path.parent.name == 'evaluation' else path.parent.name
+            if path.parent.parent.name == 'evaluations' and path.parent.name.startswith('selection_'):
+                label = path.parent.parent.parent.name
             settings_path = path.parent / 'evaluation.json'
             settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
             rows = read_csv(path); times = {}
@@ -384,16 +400,20 @@ def plot(args):
         return
     if not args.run:
         raise ValueError('plot requires --run or --runs')
-    run = Path(args.run); out = Path(args.out) if args.out else run / 'plots'; out.mkdir(parents=True, exist_ok=True)
+    run = Path(args.run); directory = evaluation_directory(run)
+    settings_path = directory / 'evaluation.json'
+    filtered = json.loads(settings_path.read_text()).get('filtered', False) if settings_path.exists() else False
+    maximum = args.max_fields if args.max_fields is not None else (None if filtered else 9)
+    out = Path(args.out) if args.out else (directory if filtered else run) / 'plots'
+    out.mkdir(parents=True, exist_ok=True)
     for what in args.what.split(','):
         if what == 'losses':
             loss_plots(run, out)
         elif what in ('fields', 'uncertainty'):
-            directory = run / 'evaluation' if (run / 'evaluation').is_dir() else run
             if what == 'fields':
-                reconstruction_plots(directory, out, args.max_fields)
+                reconstruction_plots(directory, out, maximum)
             from .comparison import load_field, uncertainty_plot
-            for path in sorted(directory.glob('*.npz'))[:args.max_fields]:
+            for path in sorted(directory.glob('*.npz'))[:maximum]:
                 uncertainty_plot(load_field(path), out, path.stem)
         elif what == 'comparisons':
             comparison_plots([run] + [Path(p) for p in args.compare], out, args.metric)

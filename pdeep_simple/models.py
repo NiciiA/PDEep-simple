@@ -1,5 +1,6 @@
 """Shared physical encoders; attention memory (A) and residual FiLM field (C)."""
 import math
+import numpy as np
 import torch
 from torch import nn
 
@@ -237,44 +238,177 @@ class DGeo(AGeo):
 
 
 class EGeo(AGeo):
-    def __init__(self, width, layers, heads, memory, wave_modes=32):
+    def __init__(self, width, layers, heads, memory, wave_modes=32, initial_latent=None,
+                 assimilation=False, infer_operator=False):
         super().__init__(width, layers, heads, memory)
         self.wave_modes = wave_modes
         self.mode_head = mlp(2 * width + 1, width, 3)
         self.initial_head = mlp(2 * width, width, 2)
         self.wave_cache = {}
+        self.initial_latent = initial_latent
+        self.assimilation, self.infer_operator = assimilation, infer_operator
+        if initial_latent is not None:
+            from .flow import InitialStateCodec
+            self.initial_codec = InitialStateCodec(width, initial_latent)
+            self.initial_condition = mlp(width, width, initial_latent)
 
-    def encode(self, inputs):
-        from .wave import modal_basis
+    def encode(self, inputs, correct=True):
         context = super().encode(inputs)
         context['wave'] = None
-        if inputs['pde'] != 2:  # Only undamped 'wave'; keep other PDE branches unchanged.
+        if inputs['pde'] == 2:
+            return self.wave_context(context, inputs, correct=correct)
+        from .data import PDES
+        from .physics import PARABOLIC
+        pde = PDES[inputs['pde']]
+        if pde in PARABOLIC + ('damped_wave',):
+            return self.evolution_context(context, inputs, pde)
+        return context
+
+    def evolution_context(self, context, inputs, pde):
+        from .wave import modal_basis, damped_trajectory
+        damped = pde == 'damped_wave'
+        scale = inputs['output_scales']; global_h = context['global_h']
+        predicted = self.initial_head(torch.cat([context['mesh'], global_h.expand(len(context['mesh']), -1)], -1)) * scale
+        chosen = torch.where(inputs['field_masks'][:, 1:3].bool(), inputs['field_values'][:, 1:3], predicted)
+        context.update(evolution_kind=pde, wave_initial=chosen, output_scales=scale,
+                       wave_t0=inputs['coordinate_bounds'][0, 2], operator_inferred=False)
+        operator = inputs.get('evolution_operator')
+        factor = scale.new_ones(())
+        if bool(inputs['scalar_masks'][0]):
+            context['log_coefficient'] = inputs['scalar'][0].log()
+        if operator is None and self.infer_operator and inputs['evolution_scalar_operator']:
+            # T2 hides only a constant scalar: geometry modes need no hidden operator.
+            operator = np.ones(len(chosen))
+            if bool(inputs['field_masks'][:, 3].any()):
+                coefficient = inputs['field_values'][:, 3].sum() / inputs['field_masks'][:, 3].sum()
+            elif bool(inputs['scalar_masks'][0]):
+                coefficient = inputs['scalar'][0]
+            else:
+                coefficient = context['log_coefficient'].exp()
+                context['operator_inferred'] = True
+            context['log_coefficient'] = coefficient.log()
+            factor = coefficient if damped else coefficient.sqrt()
+        if operator is None:
+            return context  # Still initial-aware; learn evolution through the anchored residual.
+        basis_inputs = dict(inputs, wave_geometry=inputs['evolution_geometry'], wave_operator=operator, wave_reaction=0.)
+        basis = modal_basis(basis_inputs, self.wave_modes, self.wave_cache)
+        if basis is None:
             return context
+        basis = dict(basis, omega=basis['omega'] * factor)
+        context['wave'] = basis
+        projection, omega = basis['projection'], basis['omega']
+        initial = projection @ chosen
+        summary = torch.cat([projection @ context['mesh'], global_h.expand(len(omega), -1), omega.log1p()[:, None]], -1)
+        forcing = (projection @ inputs['field_values'][:, 0] if bool(inputs['field_masks'][:, 0].all()) else
+                   self.mode_head(summary)[:, 2] * inputs['field_scales'][0])
+        context.update(wave_a=initial[:, 0], wave_b=initial[:, 1], wave_forcing=forcing,
+                       forcing_frequency=inputs['forcing_frequency'])
+        if damped:
+            trajectory, dt = damped_trajectory(omega, initial[:, 0], initial[:, 1], forcing, inputs['damping'],
+                inputs['forcing_frequency'], context['wave_t0'], inputs['coordinate_bounds'][1, 2])
+            context.update(damped_trajectory=trajectory, damped_dt=dt)
+        else:
+            # Dataset reaction is a linear sink, whose mass-orthonormal projection is -rho*q.
+            context['diffusion_rates'] = omega.square() + inputs['reaction']
+        return context
+
+    def wave_context(self, context, inputs, latent=None, correct=True):
+        from .wave import modal_basis, assimilate, observation_inputs
+        context = dict(context)
         scale = inputs['output_scales']
         global_h = context['global_h']
-        predicted_initial = self.initial_head(torch.cat([context['mesh'], global_h.expand(len(context['mesh']), -1)], -1)) * scale
+        if self.initial_latent is None:
+            predicted_initial = self.initial_head(torch.cat([context['mesh'], global_h.expand(len(context['mesh']), -1)], -1)) * scale
+        else:
+            weights = torch.as_tensor(inputs['quadrature_weights'], dtype=scale.dtype, device=scale.device)
+            geometry = self.initial_codec.geometry(inputs['nodes'], inputs['coordinate_bounds'], weights, inputs['features'][:, 2])
+            latent = self.initial_condition(global_h) if latent is None else latent
+            predicted_initial = self.initial_codec.decode(geometry, latent) * scale
         chosen = torch.where(inputs['field_masks'][:, 1:3].bool(), inputs['field_values'][:, 1:3], predicted_initial)
         context.update(wave_initial=chosen, output_scales=scale, wave_t0=inputs['coordinate_bounds'][0, 2])
         basis = modal_basis(inputs, self.wave_modes, self.wave_cache) if 'wave_operator' in inputs else None
+        if self.initial_latent is not None or self.assimilation or self.infer_operator:
+            context.update(wave_inputs=inputs, operator_inferred=False)
+        if self.infer_operator and bool(inputs['scalar_masks'][0]):
+            context['log_coefficient'] = inputs['scalar'][0].log()
+        if basis is None and self.infer_operator and inputs.get('wave_scalar_operator'):
+            geometry_inputs = dict(inputs, wave_operator=np.ones(len(chosen)), wave_reaction=0.)
+            basis = modal_basis(geometry_inputs, self.wave_modes, self.wave_cache)
+            if basis is not None:
+                if bool(inputs['field_masks'][:, 3].any()):
+                    speed = inputs['field_values'][:, 3].sum() / inputs['field_masks'][:, 3].sum()
+                    context['log_coefficient'] = speed.log()
+                else:
+                    speed = context['log_coefficient'].exp()
+                    context['operator_inferred'] = not bool(inputs['scalar_masks'][0])
+                if bool(inputs['scalar_masks'][0]):
+                    speed = inputs['scalar'][0]
+                context['geometry_omega'] = basis['omega']
+                basis = dict(basis, omega=basis['omega'] * speed)
         context['wave'] = basis
-        if basis is None:
-            return context
-        projection, omega = basis['projection'], basis['omega']
-        summary = torch.cat([projection @ context['mesh'], global_h.expand(len(omega), -1), omega.log1p()[:, None]], -1)
-        coefficients = self.mode_head(summary)
-        initial = projection @ chosen
-        a = initial[:, 0] if bool(inputs['field_masks'][:, 1].all()) else coefficients[:, 0] * scale[0]
-        b = initial[:, 1] if bool(inputs['field_masks'][:, 2].all()) else coefficients[:, 1] * scale[1]
-        forcing = (projection @ inputs['field_values'][:, 0] if bool(inputs['field_masks'][:, 0].all()) else
-                   coefficients[:, 2] * inputs['field_scales'][0])
-        context.update(wave_a=a, wave_b=b, wave_forcing=forcing, forcing_frequency=inputs['forcing_frequency'])
+        if basis is not None:
+            projection, omega = basis['projection'], basis['omega']
+            summary = torch.cat([projection @ context['mesh'], global_h.expand(len(omega), -1), omega.log1p()[:, None]], -1)
+            coefficients = self.mode_head(summary)
+            initial = projection @ chosen
+            a = initial[:, 0] if self.initial_latent is not None or bool(inputs['field_masks'][:, 1].all()) else coefficients[:, 0] * scale[0]
+            b = initial[:, 1] if self.initial_latent is not None or bool(inputs['field_masks'][:, 2].all()) else coefficients[:, 1] * scale[1]
+            forcing = (projection @ inputs['field_values'][:, 0] if bool(inputs['field_masks'][:, 0].all()) else
+                       coefficients[:, 2] * inputs['field_scales'][0])
+            context.update(wave_a=a, wave_b=b, wave_forcing=forcing, forcing_frequency=inputs['forcing_frequency'])
+        if self.assimilation:
+            observation_inputs(context, inputs)
+            if correct:
+                context = assimilate(self, context)
         return context
 
+    def with_initial_latent(self, context, latent):
+        if 'wave_inputs' not in context:
+            return context
+        raw = dict(context, log_coefficient=self.parameter(context['global_h']).squeeze(-1))
+        return self.wave_context(raw, context['wave_inputs'], latent)
+
+    def reference_latent(self, case, scales):
+        if case['meta']['pde'] != 'wave':
+            return next(self.parameters()).new_zeros(self.initial_latent)
+        geometry, values, weights = self.reference_initial(case, scales)
+        return self.initial_codec(geometry[0], values, weights)
+
+    def reference_initial(self, case, scales):
+        """Complete initial fields are targets here, never conditioning inputs."""
+        from .geometry import node_weights
+        device = next(self.parameters()).device
+        nodes = torch.as_tensor(case['nodes'], dtype=torch.float32, device=device)
+        bounds = torch.stack([torch.cat([nodes.amin(0), nodes.new_zeros(1)]),
+                              torch.cat([nodes.amax(0) - nodes.amin(0), nodes.new_ones(1)])])
+        weights = torch.as_tensor(node_weights(case), dtype=nodes.dtype, device=device)
+        boundary = torch.zeros(len(nodes), device=device); boundary[case['boundary_nodes']] = 1
+        geometry = self.initial_codec.geometry(nodes, bounds, weights, boundary)
+        values = torch.as_tensor(np.column_stack([case['initial_u'], case['initial_v']]) / scales['output'], dtype=nodes.dtype, device=device)
+        return geometry, values, weights
+
+    def representation_loss(self, case, scales):
+        geometry, target, weights = self.reference_initial(case, scales)
+        latent = self.initial_codec(geometry[0], target, weights)
+        error = (self.initial_codec.decode(geometry, latent) - target).square().mean(-1)
+        return (error * weights).sum() / weights.sum()
+
     def decode(self, context, queries):
-        from .wave import modal_evolution
+        from .wave import modal_evolution, diffusion_evolution, trajectory_values
         basis = context['wave']
         if 'wave_initial' not in context:
             return super().decode(context, queries)
+        if context.get('evolution_kind') in ('heat', 'reaction_diffusion'):
+            initial = (context['wave_initial'][queries['vertices'], 0] * queries['bary']).sum(1)
+            time = queries['coords'][:, 2:3] - context['wave_t0']
+            residual = super().decode(context, queries)[:, 0] * context['output_scales'][0]
+            u = initial + time[:, 0] * residual
+            if basis is not None:
+                phi = (basis['phi'][queries['vertices']] * queries['bary'][..., None]).sum(1)
+                q = diffusion_evolution(context['diffusion_rates'], context['wave_a'], context['wave_forcing'],
+                                        time, context['forcing_frequency'], context['wave_t0'])
+                u = u + (phi * (q - context['wave_a'])).sum(-1)
+            return torch.stack([u, torch.zeros_like(u)], -1) / context['output_scales']
         # Evaluation uses no_grad externally; residual velocity still needs d/dt.
         gradients = torch.is_grad_enabled()
         with torch.enable_grad():
@@ -291,8 +425,11 @@ class EGeo(AGeo):
             if basis is not None:
                 phi = (basis['phi'][queries['vertices']] * queries['bary'][..., None]).sum(1)
                 a, b = context['wave_a'], context['wave_b']
-                q, q_dt = modal_evolution(basis['omega'], a, b, context['wave_forcing'], time,
-                                          context['forcing_frequency'])
+                if 'damped_trajectory' in context:
+                    q, q_dt = trajectory_values(context['damped_trajectory'], context['damped_dt'], time)
+                else:
+                    q, q_dt = modal_evolution(basis['omega'], a, b, context['wave_forcing'], time,
+                                              context['forcing_frequency'])
                 u = u + (phi * (q - a - time * b)).sum(-1)
                 v = v + (phi * (q_dt - b)).sum(-1)
             field = torch.stack([u, v], -1) / context['output_scales']
@@ -300,7 +437,8 @@ class EGeo(AGeo):
 
 
 def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
-                fourier_bands=6, wave_modes=32, evolution_steps=32, siren_omega=30., green_sources=64):
+                fourier_bands=6, wave_modes=32, evolution_steps=32, siren_omega=30., green_sources=64,
+                initial_latent=None, assimilation=False, infer_operator=False):
     config = PRESETS[size].copy()
     if kind in ('A', 'D', 'E', 'F', 'G', 'H') and size == 'l':
         config['layers'] = 8  # about 28M for A, nine FiLM layers give about 27M for C
@@ -313,6 +451,12 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
         raise ValueError('fourier-bands and wave-modes must be positive')
     classes = dict(A=AGeo, C=CGeo, D=DGeo, E=EGeo)
     options = dict(fourier_bands=fourier_bands) if kind == 'D' else dict(wave_modes=wave_modes) if kind == 'E' else {}
+    if initial_latent is not None and initial_latent < 1:
+        raise ValueError('initial-latent must be positive')
+    if initial_latent is not None or assimilation or infer_operator:
+        if kind != 'E':
+            raise ValueError('initial-latent, assimilation and infer-operator are E-Geo options')
+        options.update(initial_latent=initial_latent, assimilation=assimilation, infer_operator=infer_operator)
     if kind in ('F', 'G', 'H'):
         from .propagation import FGeo, GGeo, HGeo
         if evolution_steps < 1 or green_sources < 1 or not math.isfinite(siren_omega) or siren_omega <= 0:
