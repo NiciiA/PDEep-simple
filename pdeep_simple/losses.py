@@ -109,15 +109,15 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
         residual_scale = max(scales['fields'][0], scales['output'][0])
         parts['weak'] = (residual / residual_scale).square().mean()
     # F/H preserve supplied initial nodes and zero Dirichlet boundaries directly.
-    fixed_wave_state = 'evolution_states' in context or 'green_weights' in context
-    if weights['initial'] and case['meta']['pde'] in PARABOLIC + WAVES and not fixed_wave_state:
+    fixed_state = 'evolution_states' in context or 'green_weights' in context
+    if weights['initial'] and case['meta']['pde'] in PARABOLIC + WAVES and not fixed_state:
         coords = np.column_stack([case['nodes'], np.zeros(len(case['nodes']))])
         initial = model.decode(context, query_input(case, coords, device))
         mask = inputs['field_masks'][:, 1:1 + channels]
         expected = inputs['field_values'][:, 1:1 + channels] / scale[:channels]
         if mask.sum() > 0:
             parts['initial'] = ((initial[:, :channels] - expected).square() * mask).sum() / mask.sum()
-    if weights['boundary'] and not fixed_wave_state:
+    if weights['boundary'] and not fixed_state:
         nodes = case['nodes'][case['boundary_nodes']]
         t = np.full(len(nodes), .5 if len(case['times']) > 1 else 0.)
         values = model.decode(context, query_input(case, np.column_stack([nodes, t]), device))

@@ -4,6 +4,8 @@ import numpy as np
 import torch
 from torch import nn
 from .models import AGeo, DGeo, GraphLayer, mlp
+from .data import PDES
+from .physics import PARABOLIC, WAVES
 
 
 def initial_state(context, inputs, head):
@@ -24,27 +26,61 @@ class FGeo(AGeo):
         self.state_input = nn.Linear(operator_width + 4, operator_width)
         self.evolution = nn.ModuleList([GraphLayer(operator_width) for _ in range(2)])
         self.acceleration = mlp(operator_width, operator_width, 1)
+        self.first_order = nn.Linear(operator_width, 3)
+
+    def load_state_dict(self, state_dict, strict=True, **kwargs):
+        if 'first_order.weight' not in state_dict:
+            raise ValueError('This F-Geo checkpoint predates first-order evolution; use a new --run for the extended F-Geo experiment')
+        return super().load_state_dict(state_dict, strict=strict, **kwargs)
 
     def encode(self, inputs):
+        pde = PDES[inputs['pde']]
+        if pde not in PARABOLIC + WAVES:
+            return super().encode(inputs)
+        frequency = inputs.get('forcing_frequency', 0.)
+        if 'parameters' in inputs:
+            parameters = inputs['parameters'].clone()
+            parameters[:, 1] = torch.where(parameters[:, 2] != 0, parameters[:, 1], 0.)
+            inputs = dict(inputs, parameters=parameters)
+            frequency_rows = parameters[:, 0] == 6
+            if bool(frequency_rows.any()):
+                frequency = parameters[frequency_rows, 1].sum()
         context = super().encode(inputs)
-        if inputs['pde'] != 2:
-            return context
+        first_order = pde in PARABOLIC
         scale = inputs['output_scales']; t0, duration = inputs['coordinate_bounds'][:, 2]
         dt = duration / self.evolution_steps
         state = initial_state(context, inputs, self.initial_head)
+        if first_order:
+            state = torch.stack([state[:, 0], torch.zeros_like(state[:, 0])], -1)
         condition = self.condition(torch.cat([context['mesh'], context['global_h'].expand(len(state), -1)], -1))
         free = 1 - inputs['features'][:, 2]
+        if first_order:
+            src, dst = inputs['edges'].T
+            distance2 = (inputs['nodes'][src] - inputs['nodes'][dst]).square().sum(-1).clamp_min(1e-12)
+            length2 = inputs['coordinate_bounds'][1, :2].square().mean()
         states = [state]
         for step in range(self.evolution_steps):
             time = t0 + step * dt
-            forcing = inputs['field_values'][:, :1] * torch.cos(2 * math.pi * inputs['forcing_frequency'] * time)
+            forcing = inputs['field_values'][:, :1] * torch.cos(2 * math.pi * frequency * time)
             clock = state.new_full((len(state), 1), step / self.evolution_steps)
             h = self.state_input(torch.cat([condition, state / scale, clock, forcing / inputs['field_scales'][0]], -1))
             for layer in self.evolution:
                 h = layer(h, inputs['nodes'], inputs['edges'])
-            acceleration = self.acceleration(h).squeeze(-1) * scale[0] / duration.square()
-            velocity = (state[:, 1] + dt * acceleration) * free
-            displacement = (state[:, 0] + dt * velocity) * free
+            if first_order:
+                rates = self.first_order(h)
+                diffusion = torch.nn.functional.softplus(rates[:, 0]) * length2 / duration
+                decay = torch.nn.functional.softplus(rates[:, 1]) / duration
+                drive = rates[:, 2] * scale[0] / duration
+                exchange = (diffusion[src] + diffusion[dst]) / (2 * distance2)
+                total = torch.zeros_like(free).index_add(0, dst, exchange)
+                neighbors = torch.zeros_like(free).index_add(0, dst, exchange * state[src, 0])
+                # Implicit self/decay, explicit neighbors: bounded relaxation when drive=0.
+                displacement = (state[:, 0] + dt * (neighbors + drive)) / (1 + dt * (total + decay)) * free
+                velocity = torch.zeros_like(displacement)
+            else:
+                acceleration = self.acceleration(h).squeeze(-1) * scale[0] / duration.square()
+                velocity = (state[:, 1] + dt * acceleration) * free
+                displacement = (state[:, 0] + dt * velocity) * free
             state = torch.stack([displacement, velocity], -1)
             states.append(state)
         context.update(evolution_states=torch.stack(states), evolution_t0=t0, evolution_dt=dt, output_scales=scale)

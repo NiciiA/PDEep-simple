@@ -159,16 +159,20 @@ python -m pdeep_simple plot --run runs/e_initial --what losses,fields
 
 Evaluation keeps the existing metrics and grid/refinement options. E records `modal_wave` (0/1) and the actual `wave_modes` count per case; `summary.csv` averages `modal_wave` into the fraction using FEM modes within each PDE/geometry/conditioning/sensor group. Plotting saved E wave cases writes an `*_e_wave.png` panel with FEM and predicted u/v and absolute errors, labeled with or without modes. Use `plot --runs runs/a runs/c runs/d runs/e_initial` for the usual comparison.
 
-### F-Geo: learned wave evolution
+### F-Geo: learned PDE evolution
 
 ```bash
 python -u -m pdeep_simple train --data data/colab_g2 --model F --size m \
   --evolution-steps 32 --modes forward,inverse,hybrid --loss field=1 \
-  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
-  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_f
+  --updates 2500 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_f_evolution
 ```
 
-F uses A's conditioning encoder to select a coherent nodal initial u/v field through the existing masks. A small two-layer mesh graph learns physical acceleration from the current state, time and available conditioning. Symplectic-Euler-like updates advance v, then u, over the physical interval. The full trajectory is computed once per case/conditioning draw and reused by field and physics losses and query chunks, with P1 spatial and linear temporal interpolation. Reconstruction at later times backpropagates through the entire rollout. Known zero Dirichlet nodes stay zero. The explicit integrator is not unconditionally stable or energy conserving, and 32 steps may miss rapid oscillations. Interpolation does not enforce continuous `u_t=v`; the usual kinematic metric/loss remains active when requested.
+F uses learned evolution for `heat`, `reaction_diffusion`, `wave` and `damped_wave`, following the dataset's actual time-dependent equations. `diffusion` is stationary here, as are Poisson, elliptic ADR, semilinear elliptic, p-Laplacian and Eikonal; these retain A's coordinate decoder. One shared A conditioning encoder and two-layer mesh graph handle all PDEs and Forward/Inverse/Hybrid modes. The existing masked initial-state head selects known values or infers a coherent nodal field: u for first-order problems, u/v for second-order problems. Damping, reaction and other available physical parameters enter through the existing conditioning tokens and masks. Hidden values are not substituted from reference data.
+
+Wave and damped wave share the existing acceleration head and symplectic-Euler-like v-then-u update. Heat and reaction-diffusion share one small additional head, learning nonnegative edge exchange rates, nonnegative local decay and a signed drive. Their learned rate is `u_t = sum_j beta_ij*(u_j-u_i) - decay_i*u_i + drive_i`, with positive beta scaled by mesh edge lengths. The step uses `(u_i + dt*(sum_j beta_ij*u_j + drive_i)) / (1 + dt*(sum_j beta_ij + decay_i))`: self/decay is implicit and neighbor values are explicit. With drive zero, this is a bounded relaxation for any nonnegative rates and step size, avoiding an explicit diffusion CFL restriction. It is not a full implicit FEM solve, and nonlinear learned drive can still destabilize a rollout. Fine meshes or fast dynamics can require more than 32 steps for accuracy. The wave update is not unconditionally stable or energy conserving either.
+
+Each trajectory is computed once per case/conditioning draw and reused by field and physics losses and query chunks, with P1 spatial and linear temporal interpolation. Later reconstruction errors backpropagate through all steps. Known zero Dirichlet nodes remain zero. Heat/reaction-diffusion supervise only u and leave the unused second output zero; wave/damped wave supervise u/v using the existing channel normalization. Interpolation does not enforce continuous wave `u_t=v`, so the usual kinematic metric/loss remains available. The new first-order head changes F's parameter structure: older F checkpoints are rejected with an explanatory error; use a fresh run such as `runs/colab_f_evolution`. New checkpoints retain normal resume and staged-training support.
 
 ### G-Geo: Fourier features and SIREN
 
@@ -194,14 +198,14 @@ H uses the same masked initial-field approach and predicts `u=u0+t*v0+t^2*R`, wi
 
 Spatial integration uses 64 fixed importance samples of lumped FEM node quadrature (all nodes if fewer), with area weights. Cosine forcing uses two causal midpoint samples with `s<=t` and a `(t-s)` factor. Pairwise temporary tensors are limited to 128 output queries by the selected sources. Kernel width is capped at 32; F's graph width at 64. F/H skip penalties for their exactly preserved known initial values and zero boundaries; H also skips the redundant kinematic penalty. Evaluation diagnostics remain available. This is an approximate learned propagation representation, not an exact Green's-function solver or PDE guarantee; finite spatial/time quadrature can miss fine structure and fast forcing.
 
-F/H use their specialized path for every undamped `wave`, including hidden operators. Other PDEs and `damped_wave` retain A's decoder. G uses its sinusoidal readout throughout. Each architecture trains one shared model across Forward/Inverse/Hybrid and mixed PDEs, using existing presets, losses, optimizer, staged training and resume. F/G/H keep ordinary random physical-time training queries; E's initial-time sampling is unchanged. Flow remains limited to A/C. Use separate run directories; these examples do not establish trained accuracy.
+F uses evolution for all four time-dependent families above; H uses its propagation kernels for undamped `wave`, including hidden operators, and retains A's decoder for other PDEs. G uses its sinusoidal readout throughout. Each architecture trains one shared model across Forward/Inverse/Hybrid and mixed PDEs, using existing presets, losses, optimizer, staged training and resume. F/G/H keep ordinary random physical-time training queries; E's initial-time sampling is unchanged. Flow remains limited to A/C. Use separate run directories; these examples do not establish trained accuracy.
 
 ```bash
-python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_f --frames 5 --device cuda
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_f_evolution --frames 5 --device cuda
 python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_g --frames 5 --device cuda
 python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_h --frames 5 --device cuda
-python -m pdeep_simple plot --runs runs/colab_f runs/colab_g runs/colab_h --what losses,comparisons
-python -m pdeep_simple plot --run runs/colab_f --what fields
+python -m pdeep_simple plot --runs runs/colab_f_evolution runs/colab_g runs/colab_h --what losses,comparisons
+python -m pdeep_simple plot --run runs/colab_f_evolution --what fields
 ```
 
 With the usual stored time grid, `--frames 5` evaluates 0, .25, .5, .75 and 1; F/G/H field plots retain all five. Existing comparison plots separate u/v, include error versus physical time and can include A/C/D/E and baseline results. Use matching held-out cases, observation draws and training normalization, as for existing comparisons. CUDA/MPS selection remains through `--device`; eigenmodes and numerical FEM solvers are not used by F/G/H prediction.
