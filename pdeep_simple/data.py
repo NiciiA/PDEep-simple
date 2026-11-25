@@ -478,6 +478,9 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
         result['wave_operator'] = speed ** 2
         result['wave_reaction'] = physical.get('reaction', 0.)
         result['forcing_frequency'] = physical.get('forcing_frequency', 0.)
+    if case['meta']['pde'] == 'wave':
+        result['forcing_frequency'] = physical.get('forcing_frequency', 0.)
+        result['quadrature_weights'] = node_weights(case)
     if 'field_priors' in case['meta']:
         definitions, channels, parameters = [], [], []
         for channel, name in enumerate(('source', 'initial_u', 'initial_v', 'coefficient')):

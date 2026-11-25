@@ -34,7 +34,9 @@ def model_from_config(config, device='cpu', report=True):
         raise ValueError('--flow currently supports A and C only')
     model = build_model(config['model'], config['size'], **{k: config.get(k) for k in
                         ('width', 'layers', 'heads', 'memory')}, report=report,
-                        fourier_bands=config.get('fourier_bands', 6), wave_modes=config.get('wave_modes', 32))
+                        fourier_bands=config.get('fourier_bands', 6), wave_modes=config.get('wave_modes', 32),
+                        evolution_steps=config.get('evolution_steps', 32), siren_omega=config.get('siren_omega', 30.),
+                        green_sources=config.get('green_sources', 64))
     if config.get('flow'):
         from .flow import LatentFlow
         model = LatentFlow(model, config.get('latent_dim', 32), config.get('latent_points', 256))
@@ -76,7 +78,8 @@ def draw_training_case(case, mode, count, config, scales, rng, device, training=
         initial_count = max(1, len(coords) // 4)
         coords[:initial_count, 2] = case['times'][0]
         target[:initial_count] = interpolate(case, coords[:initial_count])
-    queries = query_input(case, coords, device, bool(config['weights']['kinematic']) and not initial_aware)
+    exact_velocity = config['model'] in ('E', 'H') and case['meta']['pde'] == 'wave'
+    queries = query_input(case, coords, device, bool(config['weights']['kinematic']) and not exact_velocity)
     return inputs, queries, torch.tensor(target, dtype=torch.float32, device=device)
 
 

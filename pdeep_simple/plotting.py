@@ -244,7 +244,8 @@ def reconstruction_plots(directory, out, maximum):
         with np.load(path, allow_pickle=False) as saved:
             case = {k: saved[k] for k in saved.files}
         meta = json.loads(str(case['metadata']))
-        times = case['times']; indices = np.unique(np.linspace(0, len(times) - 1, min(4, len(times))).round().astype(int))
+        times = case['times']; maximum_frames = 5 if meta['method'] in ('F-Geo', 'G-Geo', 'H-Geo') else 4
+        indices = np.unique(np.linspace(0, len(times) - 1, min(maximum_frames, len(times))).round().astype(int))
         for channel in range(2 if meta['pde'] in WAVES else 1):
             truth, prediction = case['reference'][:, :, channel], case['prediction'][:, :, channel]
             low, high = min(truth.min(), prediction.min()), max(truth.max(), prediction.max())

@@ -1,6 +1,6 @@
 # PDEep/simple
 
-Numerical PDE datasets, deterministic A/C/D/E-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
+Numerical PDE datasets, deterministic A/C/D/E/F/G/H-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
 
 ## Installation and quick start
 
@@ -159,6 +159,53 @@ python -m pdeep_simple plot --run runs/e_initial --what losses,fields
 
 Evaluation keeps the existing metrics and grid/refinement options. E records `modal_wave` (0/1) and the actual `wave_modes` count per case; `summary.csv` averages `modal_wave` into the fraction using FEM modes within each PDE/geometry/conditioning/sensor group. Plotting saved E wave cases writes an `*_e_wave.png` panel with FEM and predicted u/v and absolute errors, labeled with or without modes. Use `plot --runs runs/a runs/c runs/d runs/e_initial` for the usual comparison.
 
+### F-Geo: learned wave evolution
+
+```bash
+python -u -m pdeep_simple train --data data/colab_g2 --model F --size m \
+  --evolution-steps 32 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_f
+```
+
+F uses A's conditioning encoder to select a coherent nodal initial u/v field through the existing masks. A small two-layer mesh graph learns physical acceleration from the current state, time and available conditioning. Symplectic-Euler-like updates advance v, then u, over the physical interval. The full trajectory is computed once per case/conditioning draw and reused by field and physics losses and query chunks, with P1 spatial and linear temporal interpolation. Reconstruction at later times backpropagates through the entire rollout. Known zero Dirichlet nodes stay zero. The explicit integrator is not unconditionally stable or energy conserving, and 32 steps may miss rapid oscillations. Interpolation does not enforce continuous `u_t=v`; the usual kinematic metric/loss remains active when requested.
+
+### G-Geo: Fourier features and SIREN
+
+```bash
+python -u -m pdeep_simple train --data data/colab_g2 --model G --size m \
+  --fourier-bands 6 --siren-omega 30 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_g
+```
+
+G keeps D's normalized Fourier coordinates and conditioned attention decoder, replacing its final field MLP with two sinusoidal hidden layers and a linear output. The frequency-scaled uniform initialization follows the [SIREN authors' implementation](https://github.com/vsitzmann/siren/blob/master/modules.py). This readout acts on coordinate, geometry, physical and observation features together. It is used for every PDE. High-frequency features can also amplify derivative losses; improved reconstruction is an experimental hypothesis.
+
+### H-Geo: learned propagation kernels
+
+```bash
+python -u -m pdeep_simple train --data data/colab_g2 --model H --size m \
+  --green-sources 64 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_h
+```
+
+H uses the same masked initial-field approach and predicts `u=u0+t*v0+t^2*R`, with physical velocity obtained by autograd. R is a weighted application of small geometry/operator-conditioned kernels to the initial displacement, velocity and known or inferred forcing amplitudes. Known-operator kernels receive neither initial/forcing amplitudes nor observations; a second pass through the **shared** conditioning encoder supplies their operator/geometry features. With hidden operators, the full available conditioning informs those features, including observations and any supplied initial state. No hidden true operator or source enters the prediction.
+
+Spatial integration uses 64 fixed importance samples of lumped FEM node quadrature (all nodes if fewer), with area weights. Cosine forcing uses two causal midpoint samples with `s<=t` and a `(t-s)` factor. Pairwise temporary tensors are limited to 128 output queries by the selected sources. Kernel width is capped at 32; F's graph width at 64. F/H skip penalties for their exactly preserved known initial values and zero boundaries; H also skips the redundant kinematic penalty. Evaluation diagnostics remain available. This is an approximate learned propagation representation, not an exact Green's-function solver or PDE guarantee; finite spatial/time quadrature can miss fine structure and fast forcing.
+
+F/H use their specialized path for every undamped `wave`, including hidden operators. Other PDEs and `damped_wave` retain A's decoder. G uses its sinusoidal readout throughout. Each architecture trains one shared model across Forward/Inverse/Hybrid and mixed PDEs, using existing presets, losses, optimizer, staged training and resume. F/G/H keep ordinary random physical-time training queries; E's initial-time sampling is unchanged. Flow remains limited to A/C. Use separate run directories; these examples do not establish trained accuracy.
+
+```bash
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_f --frames 5 --device cuda
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_g --frames 5 --device cuda
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_h --frames 5 --device cuda
+python -m pdeep_simple plot --runs runs/colab_f runs/colab_g runs/colab_h --what losses,comparisons
+python -m pdeep_simple plot --run runs/colab_f --what fields
+```
+
+With the usual stored time grid, `--frames 5` evaluates 0, .25, .5, .75 and 1; F/G/H field plots retain all five. Existing comparison plots separate u/v, include error versus physical time and can include A/C/D/E and baseline results. Use matching held-out cases, observation draws and training normalization, as for existing comparisons. CUDA/MPS selection remains through `--device`; eigenmodes and numerical FEM solvers are not used by F/G/H prediction.
+
 ### A-Geo + Flow
 
 ```bash
@@ -187,7 +234,7 @@ python -m pdeep_simple train --data data/g1_small --model C --size s \
   --device auto --run runs/c_staged
 ```
 
-The same option works with `--model A`, D or E. Updates 1–80 use only `field=1`; updates 81–400 use exactly the selected `--loss` weights. `--stage-start` is the last field-only update and defaults to 20% of the total (rounded down, at least one); it must be less than `--updates`, which remains the total update count. The model, optimizer and learning rate continue across the transition. Without `--staged`, all selected losses apply from the start. This option is for deterministic models and cannot be combined with `--flow`.
+The same option works with the other deterministic models. Updates 1–80 use only `field=1`; updates 81–400 use exactly the selected `--loss` weights. `--stage-start` is the last field-only update and defaults to 20% of the total (rounded down, at least one); it must be less than `--updates`, which remains the total update count. The model, optimizer and learning rate continue across the transition. Without `--staged`, all selected losses apply from the start. This option is for deterministic models and cannot be combined with `--flow`.
 
 Both CSVs record `stage=field` or `stage=physics`; physics terms are zero during the field stage. Existing loss plots mark the boundary with a dashed vertical line. Validation field error, fixed validation draws and best-checkpoint selection stay the same, with no extra validation pass. Resume restores the saved boundary and loss weights, even if the total update count is extended; a conflicting explicit `--stage-start` is rejected.
 
@@ -203,7 +250,7 @@ Both CSVs record `stage=field` or `stage=physics`; physics terms are zero during
 | `--ae-updates`, `--latent-dim` | First-stage updates and latent dimension; require 1 <= AE updates < total updates |
 | `--resume` | Restore `last.pt`, including model, optimizer, RNG and saved stage settings |
 
-`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the A/D/E attention models. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
+`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the attention models A/D/E/F/G/H. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
 
 Flow's **total** `--updates` includes both stages: the examples use 100 representation updates and 300 flow updates. First train a reference-field encoder and latent-conditioned A/C decoder; then freeze that representation and train a conditional velocity MLP using training-only latent normalization. Physical PDE time and latent ODE flow time are different variables. Inference uses known inputs and observations, never the reference encoder. One latent describes the entire space-time field, including wave u/v, and is reused across query chunks.
 

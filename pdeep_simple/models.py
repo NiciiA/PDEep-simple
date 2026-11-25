@@ -300,9 +300,9 @@ class EGeo(AGeo):
 
 
 def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
-                fourier_bands=6, wave_modes=32):
+                fourier_bands=6, wave_modes=32, evolution_steps=32, siren_omega=30., green_sources=64):
     config = PRESETS[size].copy()
-    if kind in ('A', 'D', 'E') and size == 'l':
+    if kind in ('A', 'D', 'E', 'F', 'G', 'H') and size == 'l':
         config['layers'] = 8  # about 28M for A, nine FiLM layers give about 27M for C
     for name, value in dict(width=width, layers=layers, heads=heads, memory=memory).items():
         if value is not None:
@@ -313,6 +313,17 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
         raise ValueError('fourier-bands and wave-modes must be positive')
     classes = dict(A=AGeo, C=CGeo, D=DGeo, E=EGeo)
     options = dict(fourier_bands=fourier_bands) if kind == 'D' else dict(wave_modes=wave_modes) if kind == 'E' else {}
+    if kind in ('F', 'G', 'H'):
+        from .propagation import FGeo, GGeo, HGeo
+        if evolution_steps < 1 or green_sources < 1 or not math.isfinite(siren_omega) or siren_omega <= 0:
+            raise ValueError('evolution-steps, green-sources and finite siren-omega must be positive')
+        classes.update(F=FGeo, G=GGeo, H=HGeo)
+        if kind == 'F':
+            options = dict(evolution_steps=evolution_steps)
+        elif kind == 'G':
+            options = dict(fourier_bands=fourier_bands, siren_omega=siren_omega)
+        else:
+            options = dict(green_sources=green_sources)
     model = classes[kind](**config, **options)
     if report:
         print(f'{kind}-Geo {size}: {sum(p.numel() for p in model.parameters()):,} parameters; {config}')

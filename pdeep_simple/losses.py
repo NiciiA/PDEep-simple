@@ -99,7 +99,7 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
     if weights['aux'] and case['meta']['tier'] == 'T2':
         label = np.log(case['meta']['coefficient'])
         parts['aux'] = (context['log_coefficient'] - label) ** 2
-    # E's undamped wave branch defines v = du/dt; its kinematic term is identically zero.
+    # E/H undamped wave branches define v = du/dt; their kinematic term is zero.
     if weights['kinematic'] and channels == 2 and 'wave_initial' not in context:
         du = derivative(prediction, queries['coords'], 0) * scale[0]
         parts['kinematic'] = ((du / scale[1] - prediction[:, 1]) ** 2).mean()
@@ -108,14 +108,16 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
         # Fixed training-distribution forcing scale, not per-case target scale.
         residual_scale = max(scales['fields'][0], scales['output'][0])
         parts['weak'] = (residual / residual_scale).square().mean()
-    if weights['initial'] and case['meta']['pde'] in PARABOLIC + WAVES:
+    # F/H preserve supplied initial nodes and zero Dirichlet boundaries directly.
+    fixed_wave_state = 'evolution_states' in context or 'green_weights' in context
+    if weights['initial'] and case['meta']['pde'] in PARABOLIC + WAVES and not fixed_wave_state:
         coords = np.column_stack([case['nodes'], np.zeros(len(case['nodes']))])
         initial = model.decode(context, query_input(case, coords, device))
         mask = inputs['field_masks'][:, 1:1 + channels]
         expected = inputs['field_values'][:, 1:1 + channels] / scale[:channels]
         if mask.sum() > 0:
             parts['initial'] = ((initial[:, :channels] - expected).square() * mask).sum() / mask.sum()
-    if weights['boundary']:
+    if weights['boundary'] and not fixed_wave_state:
         nodes = case['nodes'][case['boundary_nodes']]
         t = np.full(len(nodes), .5 if len(case['times']) > 1 else 0.)
         values = model.decode(context, query_input(case, np.column_stack([nodes, t]), device))
