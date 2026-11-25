@@ -137,6 +137,19 @@ def read_csv(path):
         return list(csv.DictReader(stream))
 
 
+def stage_lines(axes, runs):
+    boundaries = set()
+    for run in runs:
+        path = run / 'config.json'
+        config = json.loads(path.read_text()) if path.exists() else {}
+        if config.get('staged'):
+            boundaries.add(config['stage_start'])
+    for boundary in sorted(boundaries):
+        for ax in axes:
+            ax.axvline(boundary, color='.4', linestyle='--', linewidth=1,
+                       label=f'physics after {boundary}')
+
+
 def loss_plots(run, out):
     if json.loads((run / 'config.json').read_text()).get('flow'):
         from .comparison import multiple_loss_plots
@@ -151,6 +164,7 @@ def loss_plots(run, out):
         values = np.array([float(r[key]) for r in train])
         if np.any(values):
             axes[1].plot([int(r['update']) for r in train], values, label=key)
+    stage_lines(axes, [run])
     for ax, title in zip(axes, ('Normalized field MSE', 'Other loss terms (unweighted)', 'Weighted total')):
         ax.set_title(title); ax.set_xlabel('update'); ax.set_yscale('symlog', linthresh=1e-5)
         if ax.lines:
@@ -169,7 +183,8 @@ def field_loss_plots(runs, out):
                 continue
             rows = read_csv(run / filename)
             for stage in ('deterministic', 'ae', 'flow'):
-                selected = [r for r in rows if r.get('stage', 'deterministic') == stage]
+                selected = [r for r in rows if r.get('stage', 'deterministic') == stage or
+                            stage == 'deterministic' and r.get('stage') in ('field', 'physics')]
                 if selected:
                     logs.append((index, run.name, split, stage, selected))
     def present(rows, key):
@@ -188,10 +203,11 @@ def field_loss_plots(runs, out):
     def finish(ax, title, ylabel):
         ax.set_title(title); ax.set_xlabel('optimizer update'); ax.set_ylabel(ylabel)
         ax.set_yscale('symlog', linthresh=1e-5); ax.grid(alpha=.2)
+        if not ax.lines:
+            ax.text(.5, .5, 'Diagnostics not recorded', transform=ax.transAxes, ha='center')
+        stage_lines([ax], runs)
         if ax.lines:
             ax.legend(fontsize=7, ncol=2 if len(ax.lines) > 6 else 1)
-        else:
-            ax.text(.5, .5, 'Diagnostics not recorded', transform=ax.transAxes, ha='center')
     pdes = [pde for pde in PDES if any(present(rows, f'field_{pde}' if split == 'train' else f'validation_{pde}')
                                      for _, _, split, _, rows in logs)]
     if pdes:
@@ -248,6 +264,20 @@ def reconstruction_plots(directory, out, maximum):
             quantity = 'u' if channel == 0 else 'v'
             fig.suptitle(f'{meta["pde"]} / {meta["geometry"]} / {meta["mode"]} / n={meta["count"]} / {quantity}')
             fig.tight_layout(rect=(0, 0, 1, .96)); fig.savefig(out / f'{path.stem}_{quantity}.png', dpi=140); plt.close(fig)
+        if meta['method'] == 'E-Geo' and meta['pde'] == 'wave':
+            index = len(times) // 2
+            fig, axes = plt.subplots(2, 3, figsize=(12, 7))
+            for channel, quantity in enumerate(('displacement u', 'velocity v')):
+                truth = case['reference'][index, :, channel]; prediction = case['prediction'][index, :, channel]
+                limits = (min(truth.min(), prediction.min()), max(truth.max(), prediction.max()))
+                for col, (values, title) in enumerate(((truth, 'FEM reference'), (prediction, 'E-Geo'),
+                                                       (abs(prediction - truth), 'Absolute error'))):
+                    field_panel(axes[channel, col], case, values, f'{title}: {quantity}',
+                                limits if col < 2 else None, 'magma' if col == 2 else 'viridis')
+            branch = (f'{meta["wave_modes"]} FEM modes + anchored residual' if meta.get('modal_wave') else
+                      'initial-aware evolution' if meta.get('initial_aware_wave') else 'direct decoder')
+            fig.suptitle(f'E-Geo / {meta["mode"]} / t={times[index]:.3f} / {branch}')
+            fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(out / f'{path.stem}_e_wave.png', dpi=140); plt.close(fig)
 
 
 def comparison_plots(paths, out, metric='rmse'):

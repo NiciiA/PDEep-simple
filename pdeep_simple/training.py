@@ -11,6 +11,7 @@ from .data import (case_paths, load_case, normalization, model_input, observatio
 from .losses import case_loss, parse_losses, validate_loss_options, LOSS_NAMES
 from .models import build_model
 from .physics import WAVES
+from .geometry import interpolate
 
 
 def select_device(name):
@@ -29,8 +30,11 @@ def load_checkpoint(path, device='cpu'):
 
 
 def model_from_config(config, device='cpu', report=True):
+    if config.get('flow') and config['model'] not in ('A', 'C'):
+        raise ValueError('--flow currently supports A and C only')
     model = build_model(config['model'], config['size'], **{k: config.get(k) for k in
-                        ('width', 'layers', 'heads', 'memory')}, report=report)
+                        ('width', 'layers', 'heads', 'memory')}, report=report,
+                        fourier_bands=config.get('fourier_bands', 6), wave_modes=config.get('wave_modes', 32))
     if config.get('flow'):
         from .flow import LatentFlow
         model = LatentFlow(model, config.get('latent_dim', 32), config.get('latent_points', 256))
@@ -63,11 +67,16 @@ def csv_row(path, row):
         writer.writerow(row)
 
 
-def draw_training_case(case, mode, count, config, scales, rng, device):
+def draw_training_case(case, mode, count, config, scales, rng, device, training=True):
     obs = observations(case, count, config['noise'], rng)
     inputs = model_input(case, mode, obs, scales, rng, device)
     coords, target = query_draw(case, config['queries'], rng)
-    queries = query_input(case, coords, device, bool(config['weights']['kinematic']))
+    initial_aware = config['model'] == 'E' and case['meta']['pde'] == 'wave'
+    if training and initial_aware:
+        initial_count = max(1, len(coords) // 4)
+        coords[:initial_count, 2] = case['times'][0]
+        target[:initial_count] = interpolate(case, coords[:initial_count])
+    queries = query_input(case, coords, device, bool(config['weights']['kinematic']) and not initial_aware)
     return inputs, queries, torch.tensor(target, dtype=torch.float32, device=device)
 
 
@@ -97,8 +106,23 @@ def train(args):
     if checkpoint:
         # Restore scientific settings, but allow data/checkpoints to move machines.
         saved = checkpoint['config']
+        if args.staged and not saved.get('staged'):
+            raise ValueError('--staged cannot be added to a non-staged checkpoint')
+        if args.stage_start is not None and args.stage_start != saved.get('stage_start'):
+            raise ValueError('--resume restores the saved --stage-start; omit it or use the saved value')
         config = dict(saved, data=str(Path(args.data).resolve()), updates=args.updates,
                       device=args.device, run=str(run), resume=args.resume)
+    if config.get('staged'):
+        if config.get('flow'):
+            raise ValueError('--staged is for deterministic training; it cannot be combined with --flow')
+        if not checkpoint:
+            config['stage_start'] = args.stage_start if args.stage_start is not None else max(1, args.updates // 5)
+        if not 1 <= config['stage_start'] < config['updates']:
+            raise ValueError('staged training needs 1 <= stage-start < total updates')
+        print(f'Staged training: field=1 through update {config["stage_start"]}, '
+              f'then --loss {config["loss"]}' + (' (restored from checkpoint)' if checkpoint else ''))
+    elif args.stage_start is not None:
+        raise ValueError('--stage-start requires --staged')
     if config.get('flow'):
         if not checkpoint:
             config['ae_updates'] = args.ae_updates if args.ae_updates is not None else min(500, max(1, args.updates // 3))
@@ -144,6 +168,14 @@ def train(args):
     print(f'device={device}; {len(cases)} train, {len(val_cases)} validation cases; output scales={scales["output"]}')
     started = time.perf_counter()
     for update in range(start_update + 1, config['updates'] + 1):
+        active_config = config
+        if config.get('staged'):
+            stage = 'field' if update <= config['stage_start'] else 'physics'
+            if stage == 'field':
+                weights = dict.fromkeys(LOSS_NAMES, 0.); weights['field'] = 1.
+                active_config = dict(config, weights=weights)
+            if update == config['stage_start'] + 1:
+                print('Stage 2: continuing with the selected reconstruction and physics losses', flush=True)
         if config.get('flow') and update == config['ae_updates'] + 1 and stage == 'ae':
             model.eval(); train_latents = model.calibrate(cases, scales); model.set_stage('flow')
             with torch.no_grad():
@@ -171,11 +203,11 @@ def train(args):
                 fm_total += float(loss.detach()) / config['batch']
                 parts = dict.fromkeys(LOSS_NAMES, loss.detach() * 0)
             else:
-                inputs, queries, targets = draw_training_case(case, mode, count, config, scales, rng, device)
+                inputs, queries, targets = draw_training_case(case, mode, count, active_config, scales, rng, device)
                 context = None
                 if stage == 'ae':
                     context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
-                loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context, diagnostics)
+                loss, parts = case_loss(model, case, inputs, queries, targets, scales, active_config['weights'], context, diagnostics)
                 if diagnostics:
                     values = wave_fields[case['meta']['pde']]; points = len(targets)
                     values[0] += diagnostics['u'] * points; values[1] += diagnostics['v'] * points; values[2] += points
@@ -200,6 +232,8 @@ def train(args):
                     row[name] = ''
                 for pde in logged_pdes:
                     row[f'field_{pde}'] = ''
+        elif config.get('staged'):
+            row['stage'] = stage
         row.update({f'field_{pde}_{channel}': values[i] / values[2] if values[2] else ''
                     for pde, values in wave_fields.items() for i, channel in enumerate(('u', 'v'))})
         csv_row(run / 'train.csv', row)
@@ -211,11 +245,11 @@ def train(args):
             validation_waves = {pde: [0., 0., 0] for pde in WAVES}
             val_rng = np.random.default_rng(config['seed'] + 9001); val_fm = 0.
             # Recreate fixed draws each validation, over every validation physical case.
-            with torch.set_grad_enabled(stage != 'flow' and bool(config['weights']['kinematic'])):
+            with torch.set_grad_enabled(stage != 'flow' and bool(active_config['weights']['kinematic'])):
                 for index, case in enumerate(val_cases):
                     mode = config['modes'][index % len(config['modes'])]
                     counts = config['observations'] if mode == 'forward' else [n for n in config['observations'] if n > 0]
-                    inputs, queries, targets = draw_training_case(case, mode, max(counts), config, scales, val_rng, device)
+                    inputs, queries, targets = draw_training_case(case, mode, max(counts), active_config, scales, val_rng, device, training=False)
                     diagnostics = {}
                     if stage == 'flow':
                         context = model.encode(inputs)
@@ -235,7 +269,7 @@ def train(args):
                         context = None
                         if stage == 'ae':
                             context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
-                        loss, parts = case_loss(model, case, inputs, queries, targets, scales, config['weights'], context, diagnostics)
+                        loss, parts = case_loss(model, case, inputs, queries, targets, scales, active_config['weights'], context, diagnostics)
                     for name in parts:
                         validation[name] += float(parts[name].detach()) / len(val_cases)
                     validation['total'] += float(loss.detach()) / len(val_cases)
@@ -251,6 +285,8 @@ def train(args):
                     for name in LOSS_NAMES:
                         if name != 'field':
                             validation_row[name] = ''
+            elif config.get('staged'):
+                validation_row['stage'] = stage
             validation_row.update({f'validation_{pde}': values[0] / values[1] if values[1] else ''
                                    for pde, values in validation_fields.items()})
             validation_row.update({f'validation_{pde}_{channel}': values[i] / values[2] if values[2] else ''
@@ -268,6 +304,6 @@ def train(args):
             field_text = f'{totals["field"]:.5g}' if stage != 'flow' else 'not optimized in FM stage'
             print(f'update {update}/{config["updates"]}: field={field_text}, '
                   f'validation={validation["field"]:.5g}, total={totals["total"]:.5g}'
-                  + ((f', stage={stage}' + (f', FM={fm_total:.5g}' if stage == 'flow' else '')) if config.get('flow') else ''), flush=True)
+                  + ((f', stage={stage}' + (f', FM={fm_total:.5g}' if stage == 'flow' else '')) if config.get('flow') or config.get('staged') else ''), flush=True)
     metric = 'FM' if stage == 'flow' else 'field'
     print(f'training finished in {time.perf_counter() - started:.2f}s; best validation {metric}={best:.5g}')

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from .data import case_paths, load_case, normalization
 from .training import load_checkpoint, model_from_config, select_device
 from .evaluation import evaluate_case, write_rows
-from .plotting import field_panel, read_csv, comparison_plots, field_loss_plots
+from .plotting import field_panel, read_csv, comparison_plots, field_loss_plots, stage_lines
 from .baselines import METHODS
 
 
@@ -63,15 +63,17 @@ def multiple_loss_plots(runs, out):
     for run in runs:
         if not (run / 'train.csv').exists():
             continue
-        config = json.loads((run / 'config.json').read_text())
         for filename, style, split in (('train.csv', '-', 'train'), ('validation.csv', '--', 'validation')):
             for stage, column, panel in [('deterministic', 'field', 0), ('ae', 'field', 1), ('flow', 'fm', 2), ('flow', 'field', 3)]:
                 if panel == 3 and split != 'validation':
                     continue
-                rows = [r for r in read_csv(run / filename) if r.get('stage', 'deterministic') == stage and r.get(column)]
+                rows = [r for r in read_csv(run / filename) if r.get(column) and
+                        (r.get('stage', 'deterministic') == stage or
+                         stage == 'deterministic' and r.get('stage') in ('field', 'physics'))]
                 if rows:
                     axes[panel].plot([int(r['update']) for r in rows], [float(r[column]) for r in rows],
                                      style, label=f'{run.name} {split}')
+    stage_lines([axes[0]], runs)
     titles = ('Deterministic field MSE (normalized)', 'AE field MSE (normalized)', 'Latent flow matching MSE', 'Flow sample-mean MSE (normalized)')
     for ax, title in zip(axes, titles):
         ax.set_title(title); ax.set_xlabel('total update'); ax.set_yscale('symlog', linthresh=1e-5); ax.grid(alpha=.2)

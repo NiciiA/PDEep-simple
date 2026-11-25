@@ -206,16 +206,114 @@ class CGeo(nn.Module):
         return dict(field=self.decode(context, queries), log_coefficient=context['log_coefficient'])
 
 
-def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True):
+class FourierCoordinates(nn.Module):
+    def __init__(self, width, bands):
+        super().__init__()
+        self.register_buffer('frequencies', 2 * math.pi * 2 ** torch.arange(bands, dtype=torch.float32))
+        self.linear = nn.Linear(3 + 6 * bands, width)
+
+    def forward(self, coords):
+        angles = (coords[..., None] * self.frequencies).flatten(-2)
+        return self.linear(torch.cat([coords, angles.sin(), angles.cos()], -1))
+
+
+class DGeo(AGeo):
+    def __init__(self, width, layers, heads, memory, fourier_bands=6):
+        super().__init__(width, layers, heads, memory)
+        self.coordinates = FourierCoordinates(width, fourier_bands)
+
+    def encode(self, inputs):
+        context = super().encode(inputs)
+        context['coordinate_bounds'] = inputs['coordinate_bounds']
+        return context
+
+    def decode(self, context, queries):
+        lo, span = context['coordinate_bounds']
+        coords = (queries['coords'] - lo) / span
+        h = self.coordinates(coords) + self.local(torch.cat(local_features(context, queries), -1))
+        for block in self.decoder:
+            h = block(h, context['memory'])
+        return self.output(h)
+
+
+class EGeo(AGeo):
+    def __init__(self, width, layers, heads, memory, wave_modes=32):
+        super().__init__(width, layers, heads, memory)
+        self.wave_modes = wave_modes
+        self.mode_head = mlp(2 * width + 1, width, 3)
+        self.initial_head = mlp(2 * width, width, 2)
+        self.wave_cache = {}
+
+    def encode(self, inputs):
+        from .wave import modal_basis
+        context = super().encode(inputs)
+        context['wave'] = None
+        if inputs['pde'] != 2:  # Only undamped 'wave'; keep other PDE branches unchanged.
+            return context
+        scale = inputs['output_scales']
+        global_h = context['global_h']
+        predicted_initial = self.initial_head(torch.cat([context['mesh'], global_h.expand(len(context['mesh']), -1)], -1)) * scale
+        chosen = torch.where(inputs['field_masks'][:, 1:3].bool(), inputs['field_values'][:, 1:3], predicted_initial)
+        context.update(wave_initial=chosen, output_scales=scale, wave_t0=inputs['coordinate_bounds'][0, 2])
+        basis = modal_basis(inputs, self.wave_modes, self.wave_cache) if 'wave_operator' in inputs else None
+        context['wave'] = basis
+        if basis is None:
+            return context
+        projection, omega = basis['projection'], basis['omega']
+        summary = torch.cat([projection @ context['mesh'], global_h.expand(len(omega), -1), omega.log1p()[:, None]], -1)
+        coefficients = self.mode_head(summary)
+        initial = projection @ chosen
+        a = initial[:, 0] if bool(inputs['field_masks'][:, 1].all()) else coefficients[:, 0] * scale[0]
+        b = initial[:, 1] if bool(inputs['field_masks'][:, 2].all()) else coefficients[:, 1] * scale[1]
+        forcing = (projection @ inputs['field_values'][:, 0] if bool(inputs['field_masks'][:, 0].all()) else
+                   coefficients[:, 2] * inputs['field_scales'][0])
+        context.update(wave_a=a, wave_b=b, wave_forcing=forcing, forcing_frequency=inputs['forcing_frequency'])
+        return context
+
+    def decode(self, context, queries):
+        from .wave import modal_evolution
+        basis = context['wave']
+        if 'wave_initial' not in context:
+            return super().decode(context, queries)
+        # Evaluation uses no_grad externally; residual velocity still needs d/dt.
+        gradients = torch.is_grad_enabled()
+        with torch.enable_grad():
+            coords = queries['coords']
+            if not coords.requires_grad:
+                coords = coords.detach().requires_grad_(True)
+            residual = super().decode(context, dict(queries, coords=coords))[:, 0] * context['output_scales'][0]
+            residual_dt = torch.autograd.grad(residual.sum(), coords, create_graph=gradients,
+                                              retain_graph=gradients)[0][:, 2]
+            initial = (context['wave_initial'][queries['vertices']] * queries['bary'][..., None]).sum(1)
+            time = coords[:, 2:3] - context['wave_t0']
+            u = initial[:, 0] + time[:, 0] * initial[:, 1] + time[:, 0].square() * residual
+            v = initial[:, 1] + 2 * time[:, 0] * residual + time[:, 0].square() * residual_dt
+            if basis is not None:
+                phi = (basis['phi'][queries['vertices']] * queries['bary'][..., None]).sum(1)
+                a, b = context['wave_a'], context['wave_b']
+                q, q_dt = modal_evolution(basis['omega'], a, b, context['wave_forcing'], time,
+                                          context['forcing_frequency'])
+                u = u + (phi * (q - a - time * b)).sum(-1)
+                v = v + (phi * (q_dt - b)).sum(-1)
+            field = torch.stack([u, v], -1) / context['output_scales']
+        return field if gradients else field.detach()
+
+
+def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
+                fourier_bands=6, wave_modes=32):
     config = PRESETS[size].copy()
-    if kind == 'A' and size == 'l':
+    if kind in ('A', 'D', 'E') and size == 'l':
         config['layers'] = 8  # about 28M for A, nine FiLM layers give about 27M for C
     for name, value in dict(width=width, layers=layers, heads=heads, memory=memory).items():
         if value is not None:
             config[name] = value
     if min(config.values()) < 1 or config['width'] % config['heads']:
         raise ValueError('positive model dimensions required; width must be divisible by heads')
-    model = (AGeo if kind == 'A' else CGeo)(**config)
+    if fourier_bands < 1 or wave_modes < 1:
+        raise ValueError('fourier-bands and wave-modes must be positive')
+    classes = dict(A=AGeo, C=CGeo, D=DGeo, E=EGeo)
+    options = dict(fourier_bands=fourier_bands) if kind == 'D' else dict(wave_modes=wave_modes) if kind == 'E' else {}
+    model = classes[kind](**config, **options)
     if report:
         print(f'{kind}-Geo {size}: {sum(p.numel() for p in model.parameters()):,} parameters; {config}')
     return model

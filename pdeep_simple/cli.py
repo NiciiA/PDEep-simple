@@ -5,7 +5,7 @@ from .geometry import GEOMETRIES
 
 
 def parser():
-    p = argparse.ArgumentParser(description='PDEep/simple: numerical PDE cases and A-Geo/C-Geo reconstruction')
+    p = argparse.ArgumentParser(description='PDEep/simple: numerical PDE cases and geometry-conditioned reconstruction')
     commands = p.add_subparsers(dest='command', required=True)
     data = commands.add_parser('data', help='Generate independent numerical physical cases')
     data.add_argument('--config', help='Optional TOML mathematical dataset settings')
@@ -26,13 +26,17 @@ def parser():
     inspect.add_argument('--seed', type=int, default=42); inspect.add_argument('--observations', type=int, default=32)
     inspect.add_argument('--noise', type=float, default=.01, help='Absolute Gaussian observation standard deviation')
     inspect.add_argument('--out', default='runs/inspection')
-    train = commands.add_parser('train', help='Train A-Geo or C-Geo using independent physical cases')
-    train.add_argument('--data', required=True); train.add_argument('--model', choices=['A', 'C'], default='A')
+    train = commands.add_parser('train', help='Train A/C/D/E-Geo using independent physical cases')
+    train.add_argument('--data', required=True); train.add_argument('--model', choices=['A', 'C', 'D', 'E'], default='A')
     train.add_argument('--size', choices=['s', 'm', 'l', 'xl', 'xxl'], default='s')
     for name in ('width', 'layers', 'heads', 'memory'):
         train.add_argument('--' + name, type=int, help='Manual preset override')
+    train.add_argument('--fourier-bands', type=int, default=6, help='D-Geo decoder frequency bands')
+    train.add_argument('--wave-modes', type=int, default=32, help='E-Geo low-frequency FEM wave modes')
     train.add_argument('--modes', default='forward,inverse,hybrid')
     train.add_argument('--loss', default='field=1,aux=.1', help='field,aux,kinematic,weak,initial,boundary weights, e.g. field=1,weak=.001')
+    train.add_argument('--staged', action='store_true', help='Deterministic field-only training, then the selected --loss weights')
+    train.add_argument('--stage-start', type=int, help='Last field-only update; default 20%% of total updates (at least one)')
     train.add_argument('--updates', type=int, default=3000, help='Total desired updates, including updates before --resume')
     train.add_argument('--batch', type=int, default=2, help='Physical cases per update, sequential gradient accumulation')
     train.add_argument('--queries', type=int, default=256, help='Fresh area-uniform continuous space-time queries per case')

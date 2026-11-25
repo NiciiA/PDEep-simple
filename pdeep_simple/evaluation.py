@@ -243,6 +243,11 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                     inputs = model_input(case, mode, obs, scales, np.random.default_rng(draw_seed), device)
                     with torch.no_grad():
                         context = model.encode(inputs)
+                        if model_config and model_config.get('model') == 'E':
+                            basis = context.get('wave')
+                            extra.update(modal_wave=basis is not None,
+                                         initial_aware_wave='wave_initial' in context,
+                                         wave_modes=len(basis['omega']) if basis is not None else 0)
                         if samples:
                             latents = model.sample_latents(context, samples, options['flow_steps'], draw_seed)
                         if meta['tier'] == 'T2':
@@ -258,6 +263,8 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                 sync(device); nodal_seconds = time.perf_counter() - started
                 nodal = nodal.reshape(len(times), -1, 2)
                 diagnostics = residual_diagnostics(case, nodal, times, mode, draw_seed, coefficient)
+                if 'modal_wave' in extra:
+                    diagnostics.update(modal_wave=int(extra['modal_wave']), wave_modes=extra['wave_modes'])
                 boundary = np.sqrt(np.mean(nodal[:, case['boundary_nodes']] ** 2, axis=(0, 1)))
                 initial = np.sqrt(np.average((nodal[0] - interpolate(reference, nodal_coords[:len(case['nodes'])])) ** 2,
                                              axis=0, weights=node_weights(case))) if len(case['times']) > 1 else np.full(2, np.nan)
@@ -319,6 +326,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                                         refine=options['refine'], samples=samples, interval=options['interval'],
                                                                         posterior=extra.get('posterior', 'empirical flow, uncalibrated' if samples else 'none'),
                                                                         pod_rank=extra.get('pod_rank'),
+                                                                        **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave') if key in extra},
                                                                         **{key: extra[key] for key in MAP_STATS if key in extra}))))
                         _, field_mask, _, scalar_mask = known_inputs(case, mode, np.random.default_rng(draw_seed))
                         arrays.update(known_field_mask=field_mask.astype(bool), known_scalar_mask=scalar_mask.astype(bool))

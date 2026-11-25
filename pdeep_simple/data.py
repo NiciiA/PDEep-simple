@@ -463,6 +463,21 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
                 observation_mask=tensor(padding, torch.bool), pde=PDES.index(case['meta']['pde']),
                 scalar_masks=tensor(scalar_masks), scalar=tensor(scalar),
                 field_masks=tensor(masks), field_values=tensor(values))
+    lo = np.r_[case['nodes'].min(0), case['times'][0]]
+    duration = case['times'][-1] - case['times'][0] if len(case['times']) > 1 else 1.
+    span = np.r_[np.ptp(case['nodes'], axis=0), duration]
+    result['coordinate_bounds'] = tensor(np.stack([lo, span]))
+    result['output_scales'] = tensor(scales['output'])
+    result['field_scales'] = tensor(scales['fields'])
+    # Geometry and fully revealed operator only: no target fields enter the modal branch.
+    physical = case['meta'].get('parameters', {})
+    if (case['meta']['pde'] == 'wave' and masks[:, 3].all() and
+            not physical.get('damping', 0.) and not any(physical.get('advection', [0., 0.]))):
+        result['wave_geometry'] = {key: case[key] for key in ('nodes', 'triangles', 'boundary_nodes')}
+        speed = case['element_coefficient'][:, None] if 'element_coefficient' in case else values[:, 3]
+        result['wave_operator'] = speed ** 2
+        result['wave_reaction'] = physical.get('reaction', 0.)
+        result['forcing_frequency'] = physical.get('forcing_frequency', 0.)
     if 'field_priors' in case['meta']:
         definitions, channels, parameters = [], [], []
         for channel, name in enumerate(('source', 'initial_u', 'initial_v', 'coefficient')):

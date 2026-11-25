@@ -99,7 +99,8 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
     if weights['aux'] and case['meta']['tier'] == 'T2':
         label = np.log(case['meta']['coefficient'])
         parts['aux'] = (context['log_coefficient'] - label) ** 2
-    if weights['kinematic'] and channels == 2:
+    # E's undamped wave branch defines v = du/dt; its kinematic term is identically zero.
+    if weights['kinematic'] and channels == 2 and 'wave_initial' not in context:
         du = derivative(prediction, queries['coords'], 0) * scale[0]
         parts['kinematic'] = ((du / scale[1] - prediction[:, 1]) ** 2).mean()
     if weights['weak'] and weak_available(case, inputs):

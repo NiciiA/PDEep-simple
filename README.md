@@ -1,6 +1,6 @@
 # PDEep/simple
 
-Numerical PDE datasets, deterministic A-Geo/C-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
+Numerical PDE datasets, deterministic A/C/D/E-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
 
 ## Installation and quick start
 
@@ -107,7 +107,7 @@ Original unconfigured defaults include Poisson amplitudes N(0, 9 I) with K=4, he
 
 ## Training
 
-The four variants use the same data, conditioning and field decoder interfaces. These are modest examples, not evidence of trained accuracy.
+All variants use the same data, conditioning and field decoder interfaces. These are modest examples, not evidence of trained accuracy.
 
 ### A-Geo
 
@@ -124,6 +124,40 @@ python -m pdeep_simple train --data data/g1_small --model C --size s \
   --modes forward,inverse,hybrid --loss field=1 --updates 400 \
   --batch 2 --queries 512 --device auto --run runs/c
 ```
+
+### D-Geo
+
+```bash
+python -m pdeep_simple train --data data/g1_small --model D --size s \
+  --fourier-bands 6 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 400 --batch 2 --queries 512 --device auto --run runs/d
+```
+
+D reuses A's encoder and attention decoder. A already has five fixed Fourier bands; D uses six configurable bands at frequencies `2*pi*2**j`, including the raw normalized x/y/t coordinates, projected to the same width. Space is normalized by the mesh bounding box and physical time by its interval. Physical query coordinates remain available for conditioning and derivatives. D supports every existing PDE and geometry with the same losses.
+
+### E-Geo
+
+```bash
+python -m pdeep_simple train --data data/g1_small --model E --size s \
+  --wave-modes 32 --modes forward,inverse,hybrid --loss field=1 \
+  --updates 400 --batch 2 --queries 512 --device auto --run runs/e_initial
+```
+
+E shares A's backbone. Every undamped `wave` case uses initial-condition-aware evolution, including when the operator is hidden. Initial displacement and velocity are supplied when known and inferred by the existing initial-state head when hidden. Hybrid masks retain each known initial node and infer the rest; P1 interpolation evaluates these fields at arbitrary query locations. One E model handles Forward, Inverse and Hybrid. Hidden targets never construct the operator or initial fields at inference.
+
+The wave decoder uses `u = u0 + t*v0 + t^2*r(t)`, where t is physical time relative to the initial time. When the positive spatial operator is fully known, it adds `u_m(t) - u_m(0) - t*v_m(0)` from the existing mass-normalized FEM modes. Their analytic evolution retains constant/cosine forcing, including resonance; fully known initial fields and forcing are projected, while hidden modal coefficients are inferred from conditioning. Unknown operators simply omit this contribution and still use the initial-aware decoder.
+
+Velocity is the physical-time derivative of displacement, using analytic modal derivatives and autograd for A's residual decoder, with separate u/v output scales. The chosen initial fields are exact at t=0 up to interpolation and floating-point accuracy. Training puts one quarter of E wave queries at the initial time (at least one), supervising both u and v through the usual reconstruction loss; validation draws stay unchanged. The redundant kinematic penalty is skipped for this branch and logged as zero; the existing finite-difference evaluation diagnostic remains available and need not be zero on coarse time grids. Inferred initial fields can still be wrong, and the construction does not enforce the full wave equation or boundary conditions. Other optional physics losses keep their existing definitions.
+
+Other PDEs and `damped_wave` retain A's ordinary decoder. Modes keep their existing interpolation and per-mesh/operator/device memory cache, using O(nodes × modes) storage per operator; resume rebuilds the cache. Only low modes are computed (at most interior degrees of freedom minus one, except a single interior node). No dataset preparation or new parameters are needed. Use a new run directory for this changed E wave behavior. D/E retain normal device, resume and staged-training support; `--flow` remains limited to A/C.
+
+```bash
+python -m pdeep_simple eval --data data/g1_small --run runs/d --device auto
+python -m pdeep_simple eval --data data/g1_small --run runs/e_initial --device auto
+python -m pdeep_simple plot --run runs/e_initial --what losses,fields
+```
+
+Evaluation keeps the existing metrics and grid/refinement options. E records `modal_wave` (0/1) and the actual `wave_modes` count per case; `summary.csv` averages `modal_wave` into the fraction using FEM modes within each PDE/geometry/conditioning/sensor group. Plotting saved E wave cases writes an `*_e_wave.png` panel with FEM and predicted u/v and absolute errors, labeled with or without modes. Use `plot --runs runs/a runs/c runs/d runs/e_initial` for the usual comparison.
 
 ### A-Geo + Flow
 
@@ -143,6 +177,20 @@ python -m pdeep_simple train --data data/g1_small --model C --size s --flow \
   --flow-steps 16 --device auto --run runs/c_flow
 ```
 
+### Staged physics training
+
+```bash
+python -m pdeep_simple train --data data/g1_small --model C --size s \
+  --modes forward,inverse,hybrid \
+  --loss "field=1,kinematic=.01,weak=.01,initial=.01,boundary=.01" \
+  --staged --stage-start 80 --updates 400 --batch 2 --queries 512 \
+  --device auto --run runs/c_staged
+```
+
+The same option works with `--model A`, D or E. Updates 1–80 use only `field=1`; updates 81–400 use exactly the selected `--loss` weights. `--stage-start` is the last field-only update and defaults to 20% of the total (rounded down, at least one); it must be less than `--updates`, which remains the total update count. The model, optimizer and learning rate continue across the transition. Without `--staged`, all selected losses apply from the start. This option is for deterministic models and cannot be combined with `--flow`.
+
+Both CSVs record `stage=field` or `stage=physics`; physics terms are zero during the field stage. Existing loss plots mark the boundary with a dashed vertical line. Validation field error, fixed validation draws and best-checkpoint selection stay the same, with no extra validation pass. Resume restores the saved boundary and loss weights, even if the total update count is extended; a conflicting explicit `--stage-start` is rejected.
+
 | Option | Meaning |
 |---|---|
 | `--size` | `s,m,l,xl,xxl`; construction prints the parameter count |
@@ -153,9 +201,9 @@ python -m pdeep_simple train --data data/g1_small --model C --size s --flow \
 | `--device` | `auto,cpu,cuda,mps`; Colab notebook training explicitly uses `cuda` |
 | `--flow` | Field representation stage followed by conditional latent flow matching |
 | `--ae-updates`, `--latent-dim` | First-stage updates and latent dimension; require 1 <= AE updates < total updates |
-| `--resume` | Restore `last.pt`, including model, optimizer, RNG and flow stage |
+| `--resume` | Restore `last.pt`, including model, optimizer, RNG and saved stage settings |
 
-`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects A only. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
+`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the A/D/E attention models. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
 
 Flow's **total** `--updates` includes both stages: the examples use 100 representation updates and 300 flow updates. First train a reference-field encoder and latent-conditioned A/C decoder; then freeze that representation and train a conditional velocity MLP using training-only latent normalization. Physical PDE time and latent ODE flow time are different variables. Inference uses known inputs and observations, never the reference encoder. One latent describes the entire space-time field, including wave u/v, and is reused across query chunks.
 
