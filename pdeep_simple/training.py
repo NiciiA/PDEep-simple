@@ -30,6 +30,8 @@ def load_checkpoint(path, device='cpu'):
 
 
 def model_from_config(config, device='cpu', report=True):
+    if config.get('vector_output') and config.get('flow'):
+        raise ValueError('--vector-output currently supports deterministic A training only')
     if config.get('flow') and config['model'] not in ('A', 'B', 'C', 'E', 'F'):
         raise ValueError('--flow supports A/B/C and compact-initial E/F only')
     if config.get('flow') and config['model'] == 'E' and not config.get('initial_latent'):
@@ -45,6 +47,7 @@ def model_from_config(config, device='cpu', report=True):
                         infer_operator=config.get('infer_operator', False),
                         f_variant=config.get('f_variant', 'base'), f_steps=config.get('f_steps', 3),
                         joint_conditioning=config.get('joint_conditioning', False),
+                        vector_output=config.get('vector_output', False),
                         **{key: config[key] for key in ('b_latent_dim', 'b_info_rank', 'b_tau', 'b_routing',
                                                         'b_info_updates', 'b_route_weight') if key in config})
     if config.get('flow') and config['model'] != 'B':
@@ -83,7 +86,8 @@ def draw_training_case(case, mode, count, config, scales, rng, device, training=
     obs = observations(case, count, config['noise'], rng)
     inputs = model_input(case, mode, obs, scales, rng, device)
     coords, target = query_draw(case, config['queries'], rng)
-    initial_aware = config['model'] in ('E', 'F') and case['meta']['pde'] in PARABOLIC + WAVES
+    initial_aware = (config['model'] in ('E', 'F') and case['meta']['pde'] in PARABOLIC + WAVES or
+                     case['meta'].get('navier_stokes_mode') == 'unsteady')
     if training and initial_aware:
         initial_count = max(1, len(coords) // 4)
         coords[:initial_count, 2] = case['times'][0]
@@ -121,6 +125,8 @@ def train(args):
     if checkpoint:
         # Restore scientific settings, but allow data/checkpoints to move machines.
         saved = checkpoint['config']
+        if config.get('vector_output') and not saved.get('vector_output', False):
+            raise ValueError('--vector-output requires training from scratch, not a scalar/wave checkpoint')
         if config.get('joint_conditioning') and not saved.get('joint_conditioning', False):
             raise ValueError('--joint-conditioning needs training from scratch, not an original-model checkpoint')
         if args.staged and not saved.get('staged'):
@@ -159,8 +165,11 @@ def train(args):
     torch.manual_seed(config['seed']); random.seed(config['seed'])
     rng = np.random.default_rng(config['seed'])
     paths = case_paths(config['data'], 'train', config.get('geometries', '').split(',') if config.get('geometries') else None)
-    cases = [load_case(p) for p in paths]
-    val_cases = [load_case(p) for p in case_paths(config['data'], 'val', config.get('geometries', '').split(',') if config.get('geometries') else None)]
+    cases = [load_case(p, load_evaluation=False) for p in paths]
+    val_cases = [load_case(p, load_evaluation=False) for p in case_paths(config['data'], 'val', config.get('geometries', '').split(',') if config.get('geometries') else None)]
+    if any(c['meta']['pde'] == 'navier_stokes' for c in cases + val_cases):
+        if config['model'] != 'A' or not config.get('joint_conditioning') or not config.get('vector_output') or config.get('flow'):
+            raise ValueError('Navier-Stokes training requires deterministic A --joint-conditioning --vector-output')
     initial_flow = bool(config.get('flow') and config['model'] in ('E', 'F'))
     initial_pdes = PARABOLIC + WAVES if config['model'] == 'F' else ('wave',)
     if initial_flow and any(not any(c['meta']['pde'] in initial_pdes for c in split) for split in (cases, val_cases)):

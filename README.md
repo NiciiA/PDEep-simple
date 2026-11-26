@@ -22,9 +22,9 @@ Run the commands below from the package root. Data and outputs stay under `data/
 | Tier | Supported PDE names | Unknowns in Inverse mode |
 |---|---|---|
 | T1 | `poisson`, fixed unit square | Source amplitudes; four fixed Gaussian bases by default |
-| G1 | `poisson,diffusion,elliptic_adr,heat,reaction_diffusion,wave,damped_wave` | Source and/or initial fields; operator known |
-| T2 | G1 linear families, constant coefficient | Positive scalar conductivity, diffusivity or wave speed; source/initial fields known |
-| T3 | `heat,diffusion` | High-dimensional initial field, or spatial diffusion coefficient |
+| G1 | `poisson,diffusion,elliptic_adr,heat,reaction_diffusion,wave,damped_wave,helmholtz,darcy,navier_stokes` | Source and/or initial fields; operator known; NS requires A joint conditioning with vector outputs |
+| T2 | G1 scalar linear families, constant coefficient; excludes NS | Positive scalar conductivity, diffusivity, wave speed, wavenumber or permeability; source/initial fields known |
+| T3 | `heat,diffusion,darcy` | High-dimensional initial field, or spatial diffusion/permeability coefficient |
 | T4 | `semilinear,p_laplacian,eikonal` | Source field; Eikonal speed |
 
 Geometry names: `square,rectangle,disk,ellipse,lshape,annulus,hole,polygon,triangle,trapezoid,star,cross,dumbbell,crescent,two_holes`. T1 requires `square`. Nonlinear equations stay in T4; incompatible tier/PDE selections fail explicitly. Without a config or explicit new PDE names, original generation defaults are retained.
@@ -104,6 +104,221 @@ A scalar is fixed; `[low, high]` samples uniformly. Integer count ranges include
 Explicit `--resolution`, `--frames` and `--dt` override config numerics. Hybrid ranges are sampled once per case, then nodal masks use that reveal probability. A fraction of known nodes is not a fraction of recoverable information: K independent exact source rows can determine all K amplitudes.
 
 Original unconfigured defaults include Poisson amplitudes N(0, 9 I) with K=4, heat diffusivity U(0.03, 0.2), wave speed U(0.5, 1.2), T2 conductivity U(0.5, 2), and semilinear beta U(0.5, 3) with source amplitude std 12 and conductivity in (0.5, 2). The example config deliberately changes these distributions; its comments document each implemented option.
+
+## Fine references, small model meshes and 128 x 128 output
+
+The existing `data` command now separates three resolutions. `--resolution` keeps
+its old behavior and is also named `--model-resolution`: it controls the physical
+input mesh. `--solver-resolution` requests a minimum numerical resolution, reached
+by nested red refinements of that same polygon; alternatively specify
+`--solver-refinements`. Each refinement divides every triangle into four. Targets
+round **up** to a power-of-two multiple of the even model resolution; actual levels,
+vertices and requested/effective resolutions are saved in case metadata.
+`--evaluation-resolution 128` stores a regular masked 128 x 128 reference grid.
+These output points are queries, not additional Transformer mesh tokens.
+
+The physical fields are drawn with the existing priors on the model mesh, then
+prolonged as exactly the same P1 functions to the numerical mesh; elementwise
+coefficient fields remain cellwise constant under refinement. The PDE is solved
+again there: dense output is interpolation of this **fine solve**, not enlargement
+of a coarse solution image. Model-node labels, training queries and sensors all
+use the fine reference. This preserves the original physical-field distributions;
+it does not add unresolved fine-scale forcing or initial-condition complexity.
+Configure basis counts separately if richer physical priors are wanted.
+
+Nested refinement preserves the model polygon, including holes. For curved shapes,
+boundary fidelity is therefore still set by the model geometry discretization.
+Numerical spatial refinement does not establish temporal convergence: retain/use
+appropriate `--dt` and `--frames`. Physical time interpolation remains piecewise
+linear between stored snapshots; 128 x 128 is spatial, not a 128-frame time axis.
+
+Run these commands from the package root. Counts are per PDE/geometry combination.
+
+```bash
+# A. Existing PDEs: solver 128, model 32, output 128 x 128.
+python -m pdeep_simple data --tier G1 --pdes poisson,heat,wave,diffusion \
+  --geometries square --train 8 --val 2 --test 2 \
+  --solver-resolution 128 --model-resolution 32 --evaluation-resolution 128 \
+  --frames 21 --dt .002 --workers 1 --seed 42 --out data/highres
+
+# B. Add real Helmholtz and Darcy pressure.
+python -m pdeep_simple data --tier G1 \
+  --pdes poisson,heat,wave,diffusion,helmholtz,darcy --geometries square \
+  --train 8 --val 2 --test 2 --solver-resolution 128 --model-resolution 32 \
+  --evaluation-resolution 128 --frames 21 --dt .002 --workers 1 \
+  --seed 42 --out data/highres_extended
+
+# C. Optional steady low-Re Navier-Stokes, a separate vector dataset.
+python -m pip install -e ".[navier-stokes]"
+python -m pdeep_simple data --tier G1 --pdes navier_stokes --geometries square \
+  --train 8 --val 2 --test 2 --model-resolution 16 --solver-resolution 64 \
+  --evaluation-resolution 128 --workers 1 --seed 42 --out data/navier_stokes
+
+python -m pdeep_simple inspect --data data/highres_extended --split test \
+  --random 3 --observations 500 --noise 0 --out runs/highres_inspection
+python -m pdeep_simple inspect --data data/navier_stokes --split test \
+  --case 0 --observations 500 --noise 0 --out runs/navier_inspection
+```
+
+The paper-style experiment uses **500 total space-time measurements** across all
+physical times, not 500 at each frame. Counts 0/32/64/128/256/500/512 already work
+with `inspect`, `train` and `eval`. Observation sets are sampled on demand, not
+duplicated in dataset files. `--noise 0` is now supported by neural evaluation
+and plotting; `.01` retains the current noisy experiment. B uses its positive
+surrogate-error/numerical variance floor even for noiseless reference sensors.
+Likelihood-based classical baselines still require positive noise explicitly.
+
+| Family | Actual numerical definition and inverse support |
+|---|---|
+| Poisson, diffusion, heat, wave | Existing P1 consistent-mass FEM, implicit Euler/Newmark, boundary/forcing and coefficient conventions unchanged. Existing mode definitions remain. |
+| Helmholtz | Real `-Delta u-k(x)^2*u=f`, zero Dirichlet. Exact P1 polynomial reaction integration. The generator enforces `max(k)^2 < .8*pi^2*(1/Lx^2+1/Ly^2)` to remain below the first Dirichlet mode. Defaults k in [.5,1.5]; spatial variation is configurable. G1 hides source; T2 hides constant k with source known. |
+| Darcy | Exactly the stationary diffusion solver, `-div(K grad p)=f`, zero pressure on the boundary. Positive smooth/interface permeability uses the existing coefficient generator. G1 hides source; T2 hides constant permeability; T3 hides smooth/constant nodal permeability. T3 interface inversion is rejected because current physical decoders do not generate elementwise interfaces. Stored flux is cell-mean `-K_e grad p_h`, not a conservative H(div) reconstruction or a new point-observation quantity. |
+| Navier-Stokes | Optional scikit-fem Taylor-Hood P2 velocity/P1 pressure: steady Picard, or unsteady backward Euler with converged Picard. Zero velocity on all walls, `integral p(t) dx=0`. Constant viscosity defaults to [.1,.3], smooth random body-force component amplitudes default to std .01. Cases must converge and have a discrete Reynolds estimate <=5. |
+
+Navier-Stokes stores both velocity components, pressure, viscosity, both forcing
+components, geometry and no-slip information. Its actual P2 velocity polynomial is
+stored and used for interpolation; it is not reduced to a P1 vertex image. Sensor
+IDs are 0=velocity_x, 1=velocity_y, 2=pressure. These have separate training-only
+RMS scales. `navier_stokes.known_physical_inputs` hides forcing for steady
+Inverse/Hybrid; unsteady cases instead hide all/part of initial velocity, retaining
+known forcing, viscosity and walls. A supports these fields with the opt-in
+`--joint-conditioning --vector-output` configuration below. B/C/D/E/F and classical
+baselines still reject NS. Hidden viscosity and nonzero/unknown boundaries remain
+unsupported. This closed-domain setup is not a turbulence or lid-driven benchmark.
+
+Helmholtz's power/sign graph requires A's `--joint-conditioning` or B. Darcy uses
+the existing diffusion graph as well as its directed gradient/product/divergence
+representation. NS stores typed momentum/advection/pressure-gradient and
+incompressibility graphs, with velocity time derivatives and initial constraints
+only for unsteady cases. Original PDE IDs, graph
+vocabularies, parameter shapes and checkpoints are unchanged.
+
+### Physical time and unsteady Navier-Stokes
+
+| Implemented family | Physical time |
+|---|---|
+| Poisson, diffusion, elliptic ADR, semilinear, p-Laplacian, Eikonal, Helmholtz, Darcy | Stationary; only t=0. Here `diffusion` means stationary conductivity, and Darcy is stationary pressure. |
+| Heat, reaction-diffusion | Time-dependent, first-order time derivative |
+| Wave, damped wave | Time-dependent, second-order time derivative; retain displacement and its time derivative |
+| Navier-Stokes | Steady by default, or explicitly `--navier-stokes-mode unsteady` |
+
+A already encodes raw physical (x,y,t) and Fourier features in `Coordinates`,
+retains observation times, and decodes arbitrary coordinate queries. This decoder
+is reused. Physical time t is separate from B's flow-matching interpolation time s.
+Existing scalar/wave A configurations and checkpoints keep their original shapes
+and predictions. `--vector-output` adds a third output, a third observation ID,
+and the second forcing component to the same A encoder/decoder, and requires a
+fresh deterministic A joint-conditioning run. In mixed datasets, fluid and scalar
+families use separate training-only normalization statistics; fluid velocity_x,
+velocity_y and pressure have independent RMS scales (floor 1e-8).
+
+Unsteady NS currently requires the **unit square**. Initial velocity is the curl
+of a smooth random streamfunction that vanishes with its first derivatives on the
+walls, projected into the discrete no-slip, divergence-free velocity space. The
+initial pressure follows from a constrained acceleration solve, not an independent
+IC. Each implicit step enforces weak incompressibility and a zero-mean pressure
+gauge. Taylor-Hood velocity is weakly, rather than pointwise, divergence-free;
+solver metadata records both weak divergence and quadrature L2 divergence.
+The stored initial velocity is supplied only through masked mesh fields; the
+streamfunction coefficients, initial pressure and reference trajectory are absent
+from neural conditioning. Initial and boundary losses constrain velocity only.
+The scalar weak loss is not available for NS.
+
+```bash
+python -m pip install -e ".[navier-stokes]"
+# Small example, independent model/solver/output resolutions; not an accuracy claim.
+python -m pdeep_simple data --tier G1 --pdes navier_stokes --geometries square \
+  --navier-stokes-mode unsteady --time-end 1 --frames 21 --dt .005 \
+  --model-resolution 8 --solver-resolution 16 --evaluation-resolution 128 \
+  --train 8 --val 2 --test 2 --workers 1 --out data/ns_unsteady
+# Steady uses the same command with --navier-stokes-mode steady and a new --out.
+# Heat/wave and stationary diffusion share the loader and physical time settings:
+python -m pdeep_simple data --tier G1 --pdes heat,wave,diffusion --geometries square \
+  --time-end 1 --frames 21 --dt .002 --model-resolution 8 --solver-resolution 16 \
+  --evaluation-resolution 128 --train 8 --val 2 --test 2 --out data/scalar_time
+
+python -m pdeep_simple train --data data/ns_unsteady --model A \
+  --joint-conditioning --vector-output --size s --updates 3000 --batch 2 \
+  --queries 256 --modes forward,hybrid,inverse \
+  --observations 0,32,64,128,256,500,512 --noise .001 \
+  --loss field=1,initial=.1,boundary=.1 --device auto --run runs/a_ns_unsteady
+python -m pdeep_simple eval --data data/ns_unsteady --run runs/a_ns_unsteady \
+  --pde navier_stokes --modes forward,hybrid,inverse --observations 0,128,500 \
+  --noise .001 --frames 5 --grids 128 --chunk 256 --device auto
+python -m pdeep_simple inspect --data data/ns_unsteady --split test --case 0 \
+  --observations 500 --noise .001 --out runs/ns_inspection
+python -m pdeep_simple plot --run runs/a_ns_unsteady --what fields
+```
+
+The new generation settings can also be placed in the existing TOML config:
+`[numerics] time_end=1.0` and `[pdes.navier_stokes] mode="unsteady"`,
+`initial_amplitude=0.02`, `viscosity=[0.1,0.3]`, `forcing_frequency=0.0`.
+Forcing is the spatial vector field times `cos(2*pi*forcing_frequency*t)`.
+`--frames` controls saved physical times, `--dt` the maximum internal step;
+both endpoints, including t=0, are stored. Sensors are continuous space-time
+draws, not restricted to frames; 500 means 500 total scalar measurements across
+the three quantities. Uniform continuous draws do not guarantee a sample exactly
+at t=0; explicit endpoint queries are supported. A quarter of unsteady NS training
+queries are placed at t=0 to supervise the velocity initial-state reconstruction.
+
+References use P2 spatial velocity/P1 pressure and linear interpolation between
+stored physical times; this interpolation is not an exact solution of the PDE.
+NS evaluation uses five uniform times by default and saves all three quantities,
+their errors, velocity magnitude and subsampled arrows. Pressure errors use the
+stored zero-mean gauge without silently aligning a predicted pressure offset;
+pressure mean is reported separately, and pressure IC/boundary errors are omitted.
+The reported neural divergence is explicitly the **P1 projection** on the model
+mesh, distinct from the numerical solver's P2 weak divergence. For NS refinement,
+regenerate with a finer solver mesh/time step; eval `--refine` remains scalar-only.
+Check convergence for each new regime: 128x128 output alone establishes no accuracy.
+
+```bash
+# Current compatible models; no training starts as part of generation.
+python -u -m pdeep_simple train --data data/highres_extended --model A \
+  --joint-conditioning --size m --modes forward,inverse,hybrid --loss field=1 \
+  --updates 2500 --batch 2 --queries 512 --observations 0,32,128,500,512 \
+  --noise .01 --device cuda --run runs/highres_a
+
+python -u -m pdeep_simple train --data data/highres_extended --model B --size m \
+  --b-repr-updates 1000 --b-forward-updates 2000 --updates 5000 \
+  --modes forward,inverse,hybrid --loss field=1 --batch 1 --queries 512 \
+  --observations 0,32,128,500,512 --noise .01 --device cuda --run runs/highres_b
+
+python -m pdeep_simple eval --data data/highres_extended --run runs/highres_a \
+  --pde wave --modes forward,inverse,hybrid --observations 500 --noise 0 \
+  --grids 128 --frames 21 --chunk 128 --max-cases 3 --device cuda
+python -m pdeep_simple eval --data data/highres_extended --run runs/highres_b \
+  --pde wave --modes forward,inverse,hybrid --observations 500 --noise 0 \
+  --grids 128 --frames 21 --chunk 128 --max-cases 1 --samples 2 --device cuda
+```
+
+Change `--pde` for other scalar families; T2/T3 experiments require separate
+datasets with those tiers. B's 500-sensor information Jacobians can dominate time
+and memory; retained rank does not reduce exact Jacobian cost. These are starting
+commands, not established training budgets or GPU memory guarantees. A 32-subdivision
+square has 1,089 model mesh nodes; a 128-subdivision solver has 16,641 vertices.
+No mesh is silently downscaled to fit a model. Query chunking limits output-query
+memory, not the cost of the model mesh or B's sensor sensitivities.
+
+Flat NPZ files retain old case keys plus `reference_*` fine-mesh arrays and dense
+`evaluation_points/values/mask/grid_x/grid_y/weights`. Invalid grid cells have no
+stored solution values. Dense weights are equal over valid points and sum to the
+polygon area; the existing weighted relative L2 and MSE/RMSE use the same points
+for predictions and references, per scalar/wave channel and physical time. The
+generic metric helper also supports a combined Euclidean vector norm. NS neural
+evaluation remains unsupported until a vector architecture is added.
+
+Fine plus dense 21-frame wave values alone cost about 5.3 MiB per square case
+before compression; meshes, inputs and model-node labels add storage. Larger
+solver meshes and more frames scale this cost accordingly. Geometry/time remain
+float64; physical labels are float32. NS at solver resolution 128 has about
+149,000 mixed unknowns, and sparse factorization can require much more memory
+than its saved fields. Use a small generation run and check refinement convergence
+before scaling up. The scalar high-resolution path remains dependency-free beyond
+the existing stack; NS fails with installation guidance if its optional backend
+is absent. Existing datasets/loaders remain compatible. Training skips loading the
+redundant dense-output arrays, but still loads fine references eagerly; very large
+case counts can exceed CPU RAM. No lazy-loading framework is added here.
 
 ## Training
 
@@ -665,7 +880,7 @@ Drive mounting, saving and restoring are optional. Generate/train on Colab's loc
 
 ## Short technical notes
 
-- **Solvers:** sparse P1 FEM with consistent mass/forcing integration; nodal coefficient averages in stiffness and true cellwise interface coefficients. Heat/reaction–diffusion use implicit Euler; wave/damped wave use average-acceleration Newmark and retain u/v. Configured forcing may be `f(x)*cos(2*pi*frequency*t)`. Dynamic times include 0 and 1.
+- **Solvers:** sparse P1 FEM with consistent mass/forcing integration; nodal coefficient averages in stiffness and true cellwise interface coefficients. Heat/reaction–diffusion use implicit Euler; wave/damped wave use average-acceleration Newmark and retain u/v. Configured forcing may be `f(x)*cos(2*pi*frequency*t)`. Dynamic times include 0 and `--time-end` (default 1); optional NS uses mixed P2/P1 FEM as described above.
 - **Nonlinear limits:** semilinear cubic reaction is mass-lumped and solved by damped Newton. The p-Laplacian uses `(epsilon^2+|grad u|^2)^((p-2)/2)` with configurable epsilon (default 1e-4); p=2 is exactly Poisson. Eikonal is boundary-segment distance divided by **constant** positive speed. General varying-speed Eikonal, Monge–Ampère, nonlinear heat, capillarity and nonzero/Neumann boundaries remain unsupported.
 - **Coefficients/geometry:** configured smooth coefficients use `a0*(1+contrast*tanh(g))`, with contrast < .95 for positivity; the original unconfigured semilinear generator retains its bounded logistic field. Interfaces are two-valued and mesh-aligned at the mid-x threshold. ADR uses constant advection without stabilization; choose diffusion-dominated regimes. Curved boundaries are polygonal approximations; hole centers and crescent construction are fixed. Resolve narrow features adequately.
 - **Conditioning:** known values and masks are separate, including known zero. Forward gives full physical inputs; Inverse hides the tier's unknowns; Hybrid reveals configured samples. Known basis definitions do not reveal amplitudes. For legacy four-basis Poisson, full-rank Hybrid source rows determine the entire source: nearly zero prior/Bayes/MAP error is legitimate. This need not remain true for larger K or fewer revealed nodes.

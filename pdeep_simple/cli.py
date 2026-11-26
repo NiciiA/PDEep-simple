@@ -14,8 +14,15 @@ def parser():
     data.add_argument('--geometries', default='square,disk,lshape', help='Comma-separated geometry names; T1 requires square')
     for split, default in (('train', 8), ('val', 2), ('test', 2)):
         data.add_argument('--' + split, type=int, default=default, help='Physical cases per PDE-geometry combination')
-    data.add_argument('--resolution', type=int, help='Grid subdivisions (default 12, or config); rounded up to even')
-    data.add_argument('--frames', type=int, help='Stored times including 0 and 1 (default 21, or config)')
+    data.add_argument('--resolution', '--model-resolution', dest='resolution', type=int,
+                      help='Model/physical-input mesh subdivisions (default 12); rounded up to even')
+    solver = data.add_mutually_exclusive_group()
+    solver.add_argument('--solver-resolution', type=int, help='Minimum solver subdivisions; nested red refinement rounds up by powers of two')
+    solver.add_argument('--solver-refinements', type=int, help='Explicit red refinements of the model mesh')
+    data.add_argument('--evaluation-resolution', type=int, help='Store a masked NxN dense reference grid, e.g. 128; independent of both meshes')
+    data.add_argument('--frames', type=int, help='Stored physical times including both endpoints (default 21, or config)')
+    data.add_argument('--time-end', type=float, help='Physical interval [0, time-end] (default 1, or config)')
+    data.add_argument('--navier-stokes-mode', choices=['steady', 'unsteady'], help='Override pdes.navier_stokes.mode (default steady)')
     data.add_argument('--dt', type=float, help='Maximum time step (default .002, or config)')
     data.add_argument('--workers', default='auto', help='Positive integer or auto (at most four)')
     data.add_argument('--seed', type=int, default=42); data.add_argument('--out', required=True)
@@ -23,7 +30,7 @@ def parser():
     inspect.add_argument('--data', required=True); inspect.add_argument('--split', choices=['train', 'val', 'test'], default='train')
     inspect.add_argument('--case', type=int, default=0, help='Zero-based index in split')
     inspect.add_argument('--random', type=int, default=0, help='Select this many random cases instead of --case')
-    inspect.add_argument('--seed', type=int, default=42); inspect.add_argument('--observations', type=int, default=32)
+    inspect.add_argument('--seed', type=int, default=42); inspect.add_argument('--observations', type=int, default=32, help='Total sensors across space and physical time; paper-style: 500')
     inspect.add_argument('--noise', type=float, default=.01, help='Absolute Gaussian observation standard deviation')
     inspect.add_argument('--out', default='runs/inspection')
     train = commands.add_parser('train', help='Train A/B/C/D/E/F-Geo using independent physical cases')
@@ -39,6 +46,7 @@ def parser():
     train.add_argument('--b-sensitivity-weight', type=float, default=0., help='Optional forward-stage coefficient directional-derivative loss')
     train.add_argument('--joint-conditioning', action='store_true',
                        help='A only: directed operator graph, mesh fusion and relative sensor attention; train in a new run')
+    train.add_argument('--vector-output', action='store_true', help='A joint conditioning: three outputs and fluid field inputs; new checkpoints only')
     train.add_argument('--size', choices=['s', 'm', 'l', 'xl', 'xxl'], default='s')
     for name in ('width', 'layers', 'heads', 'memory'):
         train.add_argument('--' + name, type=int, help='Manual preset override')

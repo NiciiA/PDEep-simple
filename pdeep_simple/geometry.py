@@ -172,7 +172,7 @@ def sample_points(case, count, rng):
     return points
 
 
-def locate(case, points):
+def locate(case, points, return_elements=False):
     """Locate in the supplied connectivity, never a new Delaunay triangulation."""
     # Matplotlib's triangle finder respects the reentrant L boundary.
     import matplotlib.tri as mtri
@@ -194,18 +194,41 @@ def locate(case, points):
     matrix = np.stack([p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]], axis=-1)
     uv = np.linalg.solve(matrix, (np.asarray(points) - p[:, 0])[..., None])[..., 0]
     bary = np.column_stack([1 - uv.sum(axis=1), uv]).clip(0, 1)
-    return vertices, bary / bary.sum(axis=1, keepdims=True)
+    bary = bary / bary.sum(axis=1, keepdims=True)
+    return (vertices, bary, elements) if return_elements else (vertices, bary)
 
 
 def interpolate(case, queries, field=None):
-    """P1 in space, piecewise linear in physical time; stationary t must be zero."""
+    """P1 in space (NS velocity P2), linear physical time; stationary t=0."""
+    if field is None and 'reference_nodes' in case:
+        return interpolate(reference_case(case), queries)
     queries = np.asarray(queries)
     times = case['times']
     if np.any(queries[:, 2] < 0) or np.any(queries[:, 2] > times[-1] + 1e-10):
         raise ValueError("query time outside stored interval (stationary equations use t=0)")
+    if field is None and 'velocity_p2' in case:
+        vertices, bary, elements = locate(case, queries[:, :2], return_elements=True)
+        shape = np.column_stack([bary * (2 * bary - 1), 4 * bary[:, 0] * bary[:, 1],
+                                 4 * bary[:, 1] * bary[:, 2], 4 * bary[:, 0] * bary[:, 2]])
+        polynomial = case['velocity_p2']; pressures = case['pressure']
+        if polynomial.ndim == 3:  # Original steady files.
+            velocity = np.einsum('qj,qjc->qc', shape, polynomial[elements])
+            pressure = (pressures[vertices] * bary).sum(1)
+        else:
+            right = np.clip(np.searchsorted(times, queries[:, 2], side='right'), 1, len(times) - 1)
+            left = right - 1; fraction = (queries[:, 2] - times[left]) / (times[right] - times[left])
+            first = np.einsum('qj,qjc->qc', shape, polynomial[left, elements])
+            second = np.einsum('qj,qjc->qc', shape, polynomial[right, elements])
+            velocity = first * (1 - fraction[:, None]) + second * fraction[:, None]
+            first = (pressures[left[:, None], vertices] * bary).sum(1)
+            second = (pressures[right[:, None], vertices] * bary).sum(1)
+            pressure = first * (1 - fraction) + second * fraction
+        return np.column_stack([velocity, pressure])
     vertices, bary = locate(case, queries[:, :2])
     if field is None:
-        field = np.stack([case['solution'], case.get('velocity', np.zeros_like(case['solution']))], -1)
+        field = case.get('solution_fields')
+        if field is None:
+            field = np.stack([case['solution'], case.get('velocity', np.zeros_like(case['solution']))], -1)
     if len(times) == 1:
         return np.einsum('qjc,qj->qc', field[0, vertices], bary)
     right = np.clip(np.searchsorted(times, queries[:, 2], side='right'), 1, len(times) - 1)
@@ -214,6 +237,18 @@ def interpolate(case, queries, field=None):
     u0 = np.einsum('qjc,qj->qc', field[left[:, None], vertices], bary)
     u1 = np.einsum('qjc,qj->qc', field[right[:, None], vertices], bary)
     return u0 * (1 - fraction[:, None]) + u1 * fraction[:, None]
+
+
+def reference_case(case):
+    """Stored fine reference, without exposing it to model_input's mesh features."""
+    if 'reference_nodes' not in case:
+        return case
+    result = {key: value for key, value in case.items() if not key.startswith('reference_')}
+    result.update({key[len('reference_'):]: value for key, value in case.items() if key.startswith('reference_')})
+    for key in list(result):
+        if (key == 'basis' or key.endswith('_basis')) and len(result[key]) != len(result['nodes']):
+            del result[key]  # Training priors live on the model mesh, not this reference view.
+    return result
 
 
 def boundary_distance(case):
@@ -234,10 +269,13 @@ def distance_to_boundary(case, points=None):
     return result
 
 
-def evaluation_grid(case, resolution=0):
+def evaluation_grid(case, resolution=0, uniform=False):
     """Bounding-box grid masked by the actual mesh; zero selects FEM nodes."""
     if resolution == 0:
         return case['nodes'], node_weights(case), {}
+    if 'evaluation_mask' in case and case['evaluation_mask'].shape == (resolution, resolution):
+        return case['evaluation_points'], case['evaluation_weights'], dict(grid_x=case['evaluation_grid_x'],
+                    grid_y=case['evaluation_grid_y'], grid_mask=case['evaluation_mask'])
     if resolution < 3:
         raise ValueError('evaluation grids must be at least 3')
     import matplotlib.tri as mtri
@@ -246,8 +284,12 @@ def evaluation_grid(case, resolution=0):
     xx, yy = np.meshgrid(x, y)
     tri = mtri.Triangulation(*case['nodes'].T, case['triangles'])
     valid = tri.get_trifinder()(xx, yy) >= 0
+    if not valid.any():
+        raise ValueError('evaluation grid has no valid domain points; increase resolution')
     edge_weights = np.ones(resolution); edge_weights[[0, -1]] = .5
     weights = np.outer(edge_weights, edge_weights) * np.prod((high - low) / (resolution - 1))
+    if uniform:
+        weights[:] = node_weights(case).sum() / valid.sum()
     points = np.column_stack([xx[valid], yy[valid]])
     return points, weights[valid], dict(grid_x=x, grid_y=y, grid_mask=valid)
 
@@ -267,7 +309,7 @@ def refine_mesh(case, levels=1):
         a, b, c = triangles.T
         new_triangles = np.concatenate([np.stack([a, ab, ca], -1), np.stack([ab, b, bc], -1),
                                         np.stack([ca, bc, c], -1), np.stack([ab, bc, ca], -1)])
-        names = ['nodes', 'source', 'initial_u', 'initial_v', 'coefficient_fields', 'basis']
+        names = ['nodes', 'source', 'initial_u', 'initial_v', 'coefficient_fields', 'basis', 'source_vector', 'boundary_velocity']
         names += [key for key in refined if key.endswith('_basis')]
         for name in names:
             if name in refined:

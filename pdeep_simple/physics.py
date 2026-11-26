@@ -1,14 +1,52 @@
 """P1 FEM: consistent mass, implicit Euler, Newmark, lumped cubic reaction."""
 import hashlib
+import math
 import numpy as np
 from scipy.sparse import coo_matrix, diags
 from scipy.sparse.linalg import factorized, spsolve
 from .geometry import element_geometry, distance_to_boundary
 
-STATIONARY = ('poisson', 'diffusion', 'elliptic_adr', 'semilinear', 'p_laplacian', 'eikonal')
+STATIONARY = ('poisson', 'diffusion', 'elliptic_adr', 'semilinear', 'p_laplacian', 'eikonal', 'helmholtz', 'darcy', 'navier_stokes')
 WAVES = ('wave', 'damped_wave')
 PARABOLIC = ('heat', 'reaction_diffusion')
-LINEAR_ELLIPTIC = ('poisson', 'diffusion', 'elliptic_adr')
+LINEAR_ELLIPTIC = ('poisson', 'diffusion', 'elliptic_adr', 'darcy')
+
+
+def time_dependent(case):
+    pde = case['meta']['pde']
+    return pde in PARABOLIC + WAVES or pde == 'navier_stokes' and case['meta'].get('navier_stokes_mode', 'steady') == 'unsteady'
+
+
+def helmholtz_operator(case, wavenumber, check_coercivity=True):
+    """K - integral k_h^2 phi_i phi_j; exact P1 polynomial mass integration.
+
+    Stay below 0.8 of the bounding-box Dirichlet eigenvalue lower bound.
+    This conservative coercive regime excludes resonances; it is real Helmholtz,
+    not the positive-reaction screened Poisson equation.
+    """
+    mass, stiffness = assemble(case)
+    values = np.asarray(wavenumber)
+    span = np.ptp(case['nodes'], axis=0)
+    lower_bound = np.pi ** 2 * np.sum(1 / span ** 2)
+    if np.min(values) <= 0 or check_coercivity and np.max(values) ** 2 >= .8 * lower_bound:
+        raise ValueError('Helmholtz requires 0 < max(k)^2 < 0.8*pi^2*(1/Lx^2+1/Ly^2); reduce wavenumber/contrast')
+    area, _ = element_geometry(case['nodes'], case['triangles'])
+    if values.ndim == 0:
+        reaction = values ** 2 * mass
+    else:
+        if values.ndim == 2:
+            local = values[:, 0, None, None] ** 2 * area[:, None, None] / 12 * (np.ones((3, 3)) + np.eye(3))
+        else:
+            # Integral lambda_i lambda_j lambda_a lambda_b = area*prod(alpha!)/360.
+            integrals = np.empty((3, 3, 3, 3))
+            for index in np.ndindex(integrals.shape):
+                integrals[index] = math.prod(math.factorial(index.count(j)) for j in range(3)) / 360
+            nodal = values[case['triangles']]
+            local = np.einsum('ea,eb,ijab,e->eij', nodal, nodal, integrals, area)
+        triangles = case['triangles']
+        rows = np.repeat(triangles, 3, axis=1).ravel(); cols = np.tile(triangles, (1, 3)).ravel()
+        reaction = coo_matrix((local.ravel(), (rows, cols)), shape=mass.shape).tocsr()
+    return mass, stiffness - reaction
 
 
 def assemble(case, coefficient=1., advection=None, reaction=0.):
@@ -74,13 +112,24 @@ def p_laplacian(case, load, free, p, settings):
 
 
 def solve(case, pde, source, initial_u, initial_v=None, coefficient=1., beta=0.,
-          frames=21, dt=0.002, cache=None):
+          frames=21, dt=0.002, cache=None, time_end=1.):
     parameters = case.get('meta', {}).get('parameters', {})
     settings = case.get('meta', {}).get('numerics', {})
     reaction = parameters.get('reaction', 0.)
     advection = parameters.get('advection', [0., 0.])
     damping = parameters.get('damping', 0.)
     frequency = parameters.get('forcing_frequency', 0.)
+    if pde == 'helmholtz':
+        mass, operator = helmholtz_operator(case, coefficient)
+        free = np.setdiff1d(np.arange(len(case['nodes'])), case['boundary_nodes'])
+        load = (mass @ source)[free]
+        values = spsolve(operator[free][:, free], load)
+        residual = operator[free][:, free] @ values - load
+        relative = np.linalg.norm(residual) / max(np.linalg.norm(load), 1e-14)
+        if not np.isfinite(values).all() or relative > 1e-8:
+            raise RuntimeError('Helmholtz discrete solve failed its residual check')
+        solution = np.zeros((1, len(case['nodes']))); solution[0, free] = values
+        return dict(times=np.array([0.]), solution=solution), dict(method='P1 FEM Helmholtz, zero Dirichlet', relative_residual=float(relative))
     if pde == 'eikonal':
         if np.ndim(coefficient) or coefficient <= 0:
             raise ValueError('eikonal supports positive constant speed only')
@@ -141,9 +190,9 @@ def solve(case, pde, source, initial_u, initial_v=None, coefficient=1., beta=0.,
         if not np.isfinite(solution).all():
             raise RuntimeError('non-finite elliptic solution')
         return dict(times=np.array([0.]), solution=solution), info
-    if frames < 2 or dt <= 0:
-        raise ValueError("dynamics need frames>=2 and dt>0")
-    times = np.linspace(0, 1, frames)
+    if frames < 2 or dt <= 0 or time_end <= 0:
+        raise ValueError("dynamics need frames>=2, dt>0 and time-end>0")
+    times = np.linspace(0, time_end, frames)
     steps = int(np.ceil((times[1] - times[0]) / dt))
     h = (times[1] - times[0]) / steps
     u = np.asarray(initial_u)[free].copy()

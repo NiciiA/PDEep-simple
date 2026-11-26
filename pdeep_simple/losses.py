@@ -1,8 +1,8 @@
 """Small selectable objectives; weak losses use the actual P1 mesh matrices."""
 import numpy as np
 import torch
-from .data import query_input
-from .physics import assemble, STATIONARY, WAVES, PARABOLIC
+from .data import query_input, case_scales
+from .physics import assemble, helmholtz_operator, STATIONARY, WAVES, PARABOLIC, time_dependent
 from .geometry import element_geometry
 
 LOSS_NAMES = ('field', 'aux', 'kinematic', 'weak', 'initial', 'boundary')
@@ -25,7 +25,7 @@ def derivative(values, coords, channel):
 
 
 def weak_available(case, inputs):
-    return (case['meta']['pde'] != 'eikonal' and bool(inputs['field_masks'][:, 0].all()) and
+    return (case['meta']['pde'] not in ('eikonal', 'navier_stokes') and bool(inputs['field_masks'][:, 0].all()) and
             (bool(inputs['field_masks'][:, 3].all()) or case['meta']['tier'] == 'T2'))
 
 
@@ -38,13 +38,26 @@ def weak_residual(model, context, case, inputs, scales, time=.5):
     device = inputs['nodes'].device
     pde = case['meta']['pde']
     scale = torch.tensor(scales['output'], device=device)
-    times = [0.] if pde in STATIONARY else [time - .01, time, time + .01]
+    step = min(.01, (case['times'][-1] - case['times'][0]) / 4) if time_dependent(case) else .01
+    time = np.clip(time, case['times'][0] + step, case['times'][-1] - step) if time_dependent(case) else 0.
+    times = [0.] if pde in STATIONARY else [time - step, time, time + step]
     fields = []
     for t in times:
         coords = np.column_stack([case['nodes'], np.full(len(case['nodes']), t)])
-        fields.append(model.decode(context, query_input(case, coords, device)) * scale)
+        fields.append(model.decode(context, query_input(case, coords, device))[:, :len(scale)] * scale)
     coefficient_known = bool(inputs['scalar_masks'][0])
     coefficient = inputs['scalar'][0] if coefficient_known else context['log_coefficient'].exp()
+    if pde == 'helmholtz':
+        known = bool(inputs['field_masks'][:, 3].all())
+        mass, stiffness = (helmholtz_operator(case, case['element_coefficient'][:, None] if 'element_coefficient' in case else
+                                            inputs['field_values'][:, 3].detach().cpu().numpy()) if known else assemble(case))
+        mass = torch.as_tensor(mass.toarray(), dtype=torch.float32, device=device)
+        stiffness = torch.as_tensor(stiffness.toarray(), dtype=torch.float32, device=device)
+        u = fields[0][:, 0]
+        residual = stiffness @ u - mass @ inputs['field_values'][:, 0]
+        if not known: residual = residual - coefficient.square() * (mass @ u)
+        free = np.setdiff1d(np.arange(len(u)), case['boundary_nodes'])
+        return residual[free] / mass.sum(-1)[free].clamp_min(1e-10)
     if bool(inputs['field_masks'][:, 3].all()):
         operator = (case['element_coefficient'][:, None] if 'element_coefficient' in case else
                     inputs['field_values'][:, 3].detach().cpu().numpy())
@@ -73,9 +86,9 @@ def weak_residual(model, context, case, inputs, scales, time=.5):
         local = torch.tensor(area, dtype=torch.float32, device=device)[:, None] * power[:, None] * (gradients * grad[:, None]).sum(-1)
         residual = torch.zeros_like(u).index_add(0, triangles.flatten(), local.flatten()) - mass @ forcing
     if pde in PARABOLIC:
-        residual = residual + mass @ ((fields[2][:, 0] - fields[0][:, 0]) / .02)
+        residual = residual + mass @ ((fields[2][:, 0] - fields[0][:, 0]) / (2 * step))
     if pde in WAVES:
-        residual = residual + mass @ ((fields[2][:, 0] - 2 * u + fields[0][:, 0]) / .01 ** 2)
+        residual = residual + mass @ ((fields[2][:, 0] - 2 * u + fields[0][:, 0]) / step ** 2)
         residual = residual + physical.get('damping', 0.) * (mass @ fields[1][:, 1])
     if pde == 'semilinear':
         residual = residual + inputs['scalar'][1] * lump * u ** 3
@@ -85,12 +98,14 @@ def weak_residual(model, context, case, inputs, scales, time=.5):
 
 
 def case_loss(model, case, inputs, queries, targets, scales, weights, context=None, diagnostics=None):
+    scales = case_scales(scales, case)
     if context is None:
         context = model.encode(inputs)
     prediction = model.decode(context, queries)
     device = prediction.device
     scale = torch.tensor(scales['output'], device=device)
-    channels = 2 if case['meta']['pde'] in WAVES else 1
+    vector = case['meta']['pde'] == 'navier_stokes'
+    channels = 3 if vector else 2 if case['meta']['pde'] in WAVES else 1
     parts = {name: prediction.sum() * 0 for name in LOSS_NAMES}
     parts['field'] = ((prediction[:, :channels] - targets[:, :channels] / scale[:channels]) ** 2).mean()
     if diagnostics is not None and channels == 2:
@@ -108,18 +123,19 @@ def case_loss(model, case, inputs, queries, targets, scales, weights, context=No
         # Fixed training-distribution forcing scale, not per-case target scale.
         residual_scale = max(scales['fields'][0], scales['output'][0])
         parts['weak'] = (residual / residual_scale).square().mean()
-    if weights['initial'] and case['meta']['pde'] in PARABOLIC + WAVES:
+    if weights['initial'] and time_dependent(case):
         coords = np.column_stack([case['nodes'], np.zeros(len(case['nodes']))])
         initial = model.decode(context, query_input(case, coords, device))
-        mask = inputs['field_masks'][:, 1:1 + channels]
-        expected = inputs['field_values'][:, 1:1 + channels] / scale[:channels]
+        initial_channels = 2 if vector else channels
+        mask = inputs['field_masks'][:, 1:1 + initial_channels]
+        expected = inputs['field_values'][:, 1:1 + initial_channels] / scale[:initial_channels]
         if mask.sum() > 0:
-            parts['initial'] = ((initial[:, :channels] - expected).square() * mask).sum() / mask.sum()
+            parts['initial'] = ((initial[:, :initial_channels] - expected).square() * mask).sum() / mask.sum()
     if weights['boundary']:
         nodes = case['nodes'][case['boundary_nodes']]
-        t = np.full(len(nodes), .5 if len(case['times']) > 1 else 0.)
+        t = np.full(len(nodes), (case['times'][0] + case['times'][-1]) / 2)
         values = model.decode(context, query_input(case, np.column_stack([nodes, t]), device))
-        parts['boundary'] = values[:, :channels].square().mean()
+        parts['boundary'] = values[:, :2 if vector else channels].square().mean()
     total = sum(weights[key] * parts[key] for key in weights)
     return total, parts
 
@@ -128,8 +144,8 @@ def validate_loss_options(cases, modes, weights):
     pdes = {c['meta']['pde'] for c in cases}
     if weights['kinematic'] and not pdes.intersection(WAVES):
         raise ValueError('kinematic loss requires at least one wave case')
-    if weights['initial'] and not pdes.intersection(PARABOLIC + WAVES):
-        raise ValueError('initial loss requires heat or wave')
+    if weights['initial'] and not any(time_dependent(c) for c in cases):
+        raise ValueError('initial loss requires a time-dependent case')
     if weights['aux'] and not any(c['meta']['tier'] == 'T2' for c in cases):
         print('aux: omitted; this dataset has no T2 scalar-parameter targets')
     if weights['kinematic'] and len(pdes) > 1:
@@ -139,6 +155,8 @@ def validate_loss_options(cases, modes, weights):
     if weights['initial']:
         print('initial: known initial nodes only; omitted on stationary or fully hidden initial fields')
     if weights['weak']:
+        if 'navier_stokes' in pdes:
+            raise ValueError('The scalar weak loss does not implement mixed NS momentum/continuity; use field, initial and boundary losses')
         if pdes == {'eikonal'}:
             raise ValueError('Eikonal has no elliptic weak loss here; use field and boundary losses')
         stationary = pdes.intersection(STATIONARY)

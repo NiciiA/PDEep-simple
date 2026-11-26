@@ -1,0 +1,133 @@
+# Physical distributions; --pdes, --geometries and --tier select cases on the CLI.
+# G1: Poisson, Helmholtz, Darcy, diffusion, ADR, heat, reaction-diffusion,
+# wave, damped wave, Navier-Stokes. Use T4 for semilinear/p_laplacian/eikonal.
+# Sections do not automatically enable PDEs. Unknown keys are rejected.
+# Integer ranges include both endpoints; real ranges use uniform sampling.
+
+[basis]
+count = [4, 40]
+distribution = "gaussian"
+amplitude_mean = 0.0
+amplitude_std = 1.0
+scale_by_count = true
+width = [0.08, 0.26] # fractions of domain bounding-box dimensions
+
+[pdes.poisson]
+forcing_basis = [4, 40]
+
+[pdes.helmholtz]
+# -Delta u - k^2*u = f, homogeneous Dirichlet; coercivity checked per case.
+# This range passes the bounding-box check for square/disk/annulus/lshape.
+forcing_basis = [4, 32]
+wavenumber = [0.5, 3.0]
+
+[pdes.darcy]
+# -div(K grad p) = f, homogeneous Dirichlet pressure.
+forcing_basis = [4, 32]
+permeability = [0.5, 2.5]
+coefficient_kind = "smooth"
+coefficient_basis = 12
+coefficient_contrast = 0.6 # K(x) = K0*(1 + 0.6*tanh(g(x))) > 0
+
+[pdes.diffusion]
+forcing_basis = [4, 40]
+conductivity = [0.5, 2.5]
+coefficient_kind = "smooth"
+coefficient_basis = 12
+coefficient_contrast = 0.6
+
+[pdes.elliptic_adr]
+forcing_basis = [4, 40]
+diffusivity = [0.5, 2.0]
+advection = [-0.3, 0.3] # independently sampled constant x/y components
+reaction = [0.0, 1.0]
+
+[pdes.heat]
+initial_basis = [4, 40]
+forcing_basis = [0, 12]
+diffusivity = [0.05, 0.5]
+forcing_frequency = [0.0, 1.0] # f(x,t) = f(x)*cos(2*pi*frequency*t)
+
+[pdes.reaction_diffusion]
+initial_basis = [4, 40]
+forcing_basis = [0, 12]
+diffusivity = [0.05, 0.5]
+reaction = [0.0, 1.0] # linear sink, not a nonlinear reaction
+
+[pdes.wave]
+displacement_basis = [4, 40]
+velocity_basis = [4, 32]
+forcing_basis = [0, 12]
+wave_speed = [0.5, 2.0]
+
+[pdes.damped_wave]
+displacement_basis = [4, 40]
+velocity_basis = [4, 32]
+forcing_basis = [0, 12]
+wave_speed = [0.5, 2.0]
+damping = [0.0, 1.0]
+
+[pdes.navier_stokes]
+# Select --navier-stokes-mode steady/unsteady; default steady.
+# Unsteady currently requires --geometries square. All walls are no-slip.
+# Both forcing components inherit the GLOBAL basis amplitude_std above (1.0),
+# overriding the unconfigured NS default .01. Cases must converge and have Re<=5;
+# Gaussian forcing has no hard amplitude bound, so every draw is checked.
+viscosity = [0.15, 0.6]
+forcing_basis = [4, 16]
+initial_amplitude = 0.02 # unsteady streamfunction amplitude; independent of basis
+forcing_frequency = 0.0 # steady body force; nonzero frequencies for unsteady only
+
+# The following three families require --tier T4.
+[pdes.semilinear]
+forcing_basis = [4, 40]
+beta = [0.1, 2.0]
+
+[pdes.p_laplacian]
+forcing_basis = [4, 40]
+p = [2.0, 4.0]
+
+[pdes.eikonal]
+speed = [0.5, 2.0]
+
+# Square, disk and lshape have no additional parameters here.
+[geometries.rectangle]
+aspect_ratio = [0.6, 1.8]
+[geometries.ellipse]
+axis_ratio = [0.5, 0.95]
+[geometries.triangle]
+apex = [0.3, 0.7]
+[geometries.trapezoid]
+top_ratio = [0.4, 0.9]
+[geometries.star]
+points = [4, 7]
+inner_ratio = [0.4, 0.65]
+[geometries.cross]
+arm_width = [0.3, 0.5]
+[geometries.dumbbell]
+neck_width = [0.2, 0.4]
+[geometries.annulus]
+inner_ratio = [0.25, 0.5]
+[geometries.hole]
+hole_radius = [0.08, 0.16]
+[geometries.two_holes]
+hole_radius = [0.07, 0.13]
+[geometries.polygon]
+sides = [5, 8]
+
+[conditioning]
+hybrid_known_source_fraction = [0.05, 0.50]
+hybrid_known_initial_fraction = [0.05, 0.60]
+hybrid_known_coefficient_fraction = [0.05, 0.50]
+
+[numerics]
+# CLI options override these. Starting resolutions, not an accuracy guarantee.
+resolution = 32 # model input mesh; TOML uses resolution, not model_resolution
+solver_resolution = 64 # nested refinement of model mesh
+evaluation_resolution = 128 # spatial output grid, not a numerical solver setting
+time_end = 1.0
+frames = 101 # physical snapshots every .01; helps resolve faster waves
+dt = 0.002 # maximum internal step; independent of the saved frame count
+newton_iterations = 80
+newton_tolerance = 1e-9
+p_regularization = 0.0001

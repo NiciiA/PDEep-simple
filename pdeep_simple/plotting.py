@@ -11,7 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 from .data import case_paths, load_case, observations
-from .geometry import node_weights
+from .geometry import node_weights, reference_case, evaluation_grid, interpolate
 
 
 def field_panel(ax, case, values, title, limits=None, cmap='viridis'):
@@ -31,7 +31,8 @@ def field_panel(ax, case, values, title, limits=None, cmap='viridis'):
 def dataset_summary(paths, out):
     stats, parameters, betas, coefficient_ranges, splits = [], [], [], [], []
     for path in paths:
-        case = load_case(path); u = case['solution']; w = node_weights(case); w /= w.sum()
+        case = load_case(path); reference = reference_case(case); u = reference['solution']; w = node_weights(reference); w /= w.sum()
+        if case['meta']['pde'] == 'navier_stokes': u = np.linalg.norm(reference['solution_fields'][:, :, :2], axis=-1)
         stats.append(dict(case=path.name, pde=case['meta']['pde'], geometry=case['meta']['geometry'],
                           minimum=float(u.min()), maximum=float(u.max()), mean=float(np.mean(u @ w)),
                           rms=float(np.sqrt(np.mean(u ** 2 @ w))), std=float(u.std()),
@@ -68,6 +69,9 @@ def inspect_data(args):
         case = load_case(paths[index]); meta = case['meta']; times = case['times']
         frames = np.unique(np.linspace(0, len(times) - 1, min(4, len(times))).round().astype(int))
         obs = observations(case, args.observations, args.noise, np.random.default_rng(args.seed + meta['seed']))
+        if 'reference_nodes' in case or 'evaluation_values' in case or meta['pde'] in ('helmholtz', 'darcy', 'navier_stokes'):
+            inspect_reference_case(case, obs, out, paths[index].stem)
+            continue
         panels = [('Coefficient a / alpha / c', case['coefficient_fields'])]
         if meta['pde'] != 'eikonal':
             panels.insert(0, ('Source f', case['source']))
@@ -130,6 +134,65 @@ def inspect_data(args):
         fig.tight_layout(rect=(0, 0, 1, .94))
         fig.savefig(out / f'{paths[index].stem}.png', dpi=130); plt.close(fig)
         print(paths[index].name, stats)
+
+
+def inspect_reference_case(case, obs, out, stem):
+    """Same Matplotlib panels for fine references, dense outputs and vector data."""
+    from .reference import quantities
+    reference = reference_case(case); pde = case['meta']['pde']; vector = pde == 'navier_stokes'
+    physical = [('Viscosity' if vector else 'Permeability K' if pde == 'darcy' else 'Wavenumber k' if pde == 'helmholtz' else 'Coefficient', case['coefficient_fields'])]
+    if vector:
+        physical += [('Forcing x', case['source_vector'][:, 0]), ('Forcing y', case['source_vector'][:, 1])]
+        if 'initial_velocity' in case:
+            physical += [('Initial velocity x', case['initial_velocity'][:, 0]), ('Initial velocity y', case['initial_velocity'][:, 1])]
+    elif pde != 'eikonal': physical += [('Source f', case['source'])]
+    if pde not in STATIONARY: physical += [('Initial u', case['initial_u'])]
+    if pde in WAVES: physical += [('Initial v', case['initial_v'])]
+    count = 2 + len(physical); rows = int(np.ceil(count / 3))
+    fig, axes = plt.subplots(rows, 3, figsize=(12, 3.7 * rows), squeeze=False); axes = axes.ravel()
+    for ax, mesh, title in zip(axes[:2], (case, reference), ('Model input mesh', 'Numerical solver mesh')):
+        ax.triplot(*mesh['nodes'].T, mesh['triangles'], linewidth=.2)
+        ax.set_aspect('equal'); ax.set_title(f'{title}: {len(mesh["nodes"])} vertices')
+    for ax, (title, values) in zip(axes[2:], physical): field_panel(ax, case, values, title)
+    for ax in axes[count:]: ax.axis('off')
+    fig.suptitle(f'{pde} | {case["meta"]["geometry"]} | physical fields and geometry')
+    fig.tight_layout(); fig.savefig(out / f'{stem}_physical.png', dpi=140); plt.close(fig)
+
+    resolution = case.get('evaluation_mask', np.empty((128, 128))).shape[0]
+    points, _, arrays = evaluation_grid(case, resolution, uniform=True)
+    grid = dict(case, **arrays)
+    frames = np.unique(np.linspace(0, len(case['times']) - 1, min(3, len(case['times']))).astype(int))
+    panels = []
+    for frame in frames:
+        values = (case['evaluation_values'][frame] if 'evaluation_values' in case else
+                  interpolate(case, np.column_stack([points, np.full(len(points), case['times'][frame])])))
+        for q, name in enumerate(quantities(case)):
+            panels.append((values[:, q], f'{name}, t={case["times"][frame]:.3g}, {resolution}x{resolution}'))
+        if vector: panels.append((np.linalg.norm(values[:, :2], axis=-1), f'Velocity magnitude, t={case["times"][frame]:.3g}'))
+    extra = 2 + int(vector or pde == 'darcy'); count = len(panels) + extra; rows = int(np.ceil(count / 3))
+    fig, axes = plt.subplots(rows, 3, figsize=(12, 3.7 * rows), squeeze=False); axes = axes.ravel()
+    for ax, (values, title) in zip(axes, panels): field_panel(ax, grid, values, title)
+    ax = axes[len(panels)]; field_panel(ax, grid, panels[0][0], f'{len(obs["values"])} total observations')
+    for q, name in enumerate(quantities(case)):
+        selected = obs['quantity'] == q
+        if selected.any(): ax.scatter(*obs['queries'][selected, :2].T, s=9, marker=('o', '^', 'x')[q], label=name)
+    if len(obs['values']): ax.legend(fontsize=8)
+    ax = axes[len(panels) + 1]; ax.hist(obs['queries'][:, 2], bins=20)
+    ax.set_xlabel('Physical time'); ax.set_ylabel('Total measurements'); ax.set_title('Observation times')
+    if vector:
+        values = case['evaluation_values'][0] if 'evaluation_values' in case else interpolate(case, np.column_stack([points, np.zeros(len(points))]))
+        ax = axes[len(panels) + 2]; field_panel(ax, grid, np.linalg.norm(values[:, :2], axis=-1), 'Velocity vectors at t=0 (subsampled)')
+        step = max(1, len(points) // 180)
+        ax.quiver(*points[::step].T, *values[::step, :2].T, color='black')
+    elif pde == 'darcy':
+        from .reference import darcy_flux
+        ax = axes[len(panels) + 2]; field_panel(ax, grid, panels[0][0], 'Cell-mean Darcy flux')
+        centers = reference['nodes'][reference['triangles']].mean(1); flux = darcy_flux(reference); step = max(1, len(flux) // 180)
+        ax.quiver(*centers[::step].T, *flux[::step].T, color='black')
+    for ax in axes[count:]: ax.axis('off')
+    fig.suptitle(f'{pde} | numerical reference; invalid grid points masked')
+    fig.tight_layout(); fig.savefig(out / f'{stem}_reference.png', dpi=140); plt.close(fig)
+    print(stem, case['meta'].get('resolutions', {}), 'observations=', len(obs['values']))
 
 
 def read_csv(path):
@@ -251,7 +314,7 @@ def reconstruction_plots(directory, out, maximum):
         case_label = f'{meta["case"]} / ' if filtered else ''
         times = case['times']; maximum_frames = 5 if filtered or meta['method'] == 'E-Flow' or meta['method'].startswith('F-') or meta.get('initial_aware_evolution') or meta.get('initial_latent') or meta.get('assimilation') or meta.get('infer_operator') else 4
         indices = np.unique(np.linspace(0, len(times) - 1, min(maximum_frames, len(times))).round().astype(int))
-        for channel in range(2 if meta['pde'] in WAVES else 1):
+        for channel in range(3 if meta['pde'] == 'navier_stokes' else 2 if meta['pde'] in WAVES else 1):
             truth, prediction = case['reference'][:, :, channel], case['prediction'][:, :, channel]
             low, high = min(truth.min(), prediction.min()), max(truth.max(), prediction.max())
             fig, axes = plt.subplots(len(indices), 3, squeeze=False, figsize=(12, 3.4 * len(indices)))
@@ -267,9 +330,23 @@ def reconstruction_plots(directory, out, maximum):
                     obs = case['observation_queries']
                     keep = (case['observation_quantity'] == channel) & (abs(obs[:, 2] - t) <= (.16 if len(times) > 1 else 1e-6))
                     axes[row, col].scatter(*obs[keep, :2].T, facecolors='none', edgecolors='white', linewidths=.8, s=22)
-            quantity = 'u' if channel == 0 else 'v'
+            quantity = meta.get('quantities', ['u', 'v'])[channel]
             fig.suptitle(f'{case_label}{meta["pde"]} / {meta["geometry"]} / {meta["mode"]} / n={meta["count"]} / {quantity}')
             fig.tight_layout(rect=(0, 0, 1, .96)); fig.savefig(out / f'{path.stem}_{quantity}.png', dpi=140); plt.close(fig)
+        if meta['pde'] == 'navier_stokes':
+            fig, axes = plt.subplots(len(indices), 3, squeeze=False, figsize=(12, 3.4 * len(indices)))
+            points = case['query_points']; step = max(1, len(points) // 160)
+            reference, prediction = case['reference'][:, :, :2], case['prediction'][:, :, :2]
+            maximum = max(np.linalg.norm(reference, axis=-1).max(), np.linalg.norm(prediction, axis=-1).max(), 1e-8)
+            for row, index in enumerate(indices):
+                for col, (velocity, title) in enumerate(((reference[index], 'Reference'), (prediction[index], 'Prediction'))):
+                    field_panel(axes[row, col], case, np.linalg.norm(velocity, axis=-1),
+                                f'{title} speed, t={times[index]:.3g}', (0., maximum))
+                    axes[row, col].quiver(*points[::step].T, *velocity[::step].T, color='black')
+                error = np.linalg.norm(prediction[index] - reference[index], axis=-1)
+                field_panel(axes[row, 2], case, error, 'Velocity vector error', cmap='magma')
+            fig.suptitle(f'{meta["mode"]} / n={meta["count"]} / velocity magnitude and arrows')
+            fig.tight_layout(rect=(0, 0, 1, .975)); fig.savefig(out / f'{path.stem}_velocity.png', dpi=140); plt.close(fig)
         if meta['method'] == 'E-Geo' and meta['pde'] == 'wave':
             index = len(times) // 2
             fig, axes = plt.subplots(2, 3, figsize=(12, 7))
@@ -366,7 +443,8 @@ def comparison_panels(records, out, suffix='', metric='rmse'):
             fig.tight_layout(); fig.savefig(out / f'comparisons_{mode}_{quantity}{suffix}.png', dpi=150); plt.close(fig)
             shared_keys = {(comparison_case(r), r['method'], r['observations']) for r in subset}
             timed = [r for r in records if r['time'] != 'all' and r['mode'] == mode and r['quantity'] == quantity
-                     and r['pde'] not in STATIONARY
+                     and (r['pde'] not in STATIONARY or
+                          r['pde'] == 'navier_stokes' and ',' in r.get('reference_times', ''))
                      and (comparison_case(r), r['method'], r['observations']) in shared_keys]
             if not timed:
                 continue
@@ -379,7 +457,7 @@ def comparison_panels(records, out, suffix='', metric='rmse'):
                 ax.plot(times, [np.mean([float(r[metric]) for r in rows if float(r['time']) == t]) for t in times], marker='o', label=f'{method} / {pde}')
             ax.set_xlabel('physical time'); ax.set_ylabel(error_label); ax.legend(fontsize=7, ncol=2); ax.grid(alpha=.2)
             fig.tight_layout(); fig.savefig(out / f'error_time_{mode}_{quantity}{suffix}.png', dpi=150); plt.close(fig)
-    coefficient_rows = [r for r in all_rows if r['quantity'] == 'u' and np.isfinite(float(r['coefficient_prediction']))]
+    coefficient_rows = [r for r in all_rows if r['quantity'] in ('u', 'pressure') and np.isfinite(float(r['coefficient_prediction']))]
     if coefficient_rows:
         pdes = sorted({r['pde'] for r in coefficient_rows})
         fig, axes = plt.subplots(1, len(pdes), figsize=(5 * len(pdes), 4.5), squeeze=False)

@@ -13,9 +13,10 @@ from pathlib import Path
 import numpy as np
 import torch
 from .data import (case_paths, load_case, normalization, observations, model_input, query_input,
-                   known_inputs, MODES, PDES)
-from .geometry import node_weights, evaluation_grid, interpolate, refine_mesh
-from .physics import assemble, solve, WAVES, PARABOLIC, LINEAR_ELLIPTIC
+                   known_inputs, case_scales, MODES, PDES)
+from .geometry import node_weights, evaluation_grid, interpolate, refine_mesh, reference_case
+from .physics import assemble, solve, helmholtz_operator, WAVES, PARABOLIC, LINEAR_ELLIPTIC
+from .reference import quantities
 from .geometry import element_geometry
 from .training import load_checkpoint, model_from_config, select_device, sync
 from .baselines import prepare_baseline, baseline_values, fit_pod, METHODS, MAP_STATS
@@ -48,6 +49,8 @@ def time_weights(times):
 
 def error_metrics(prediction, reference, weights, scale):
     difference = prediction - reference
+    if difference.ndim == np.ndim(weights) + 1:
+        weights = np.asarray(weights)[..., None]  # Combined vector Euclidean L2; scalar calls unchanged.
     mse = float(np.sum(weights * difference ** 2) / weights.sum())
     return dict(mse=mse, rmse=float(np.sqrt(mse)), mae=float(np.sum(weights * abs(difference)) / weights.sum()),
                 relative_l2=float(np.sqrt(np.sum(weights * difference ** 2) /
@@ -57,6 +60,14 @@ def error_metrics(prediction, reference, weights, scale):
 
 
 def residual_diagnostics(case, field, times, mode, seed, coefficient):
+    if case['meta']['pde'] == 'navier_stokes':
+        # P1 projection of neural velocity, not the solver's weak P2 constraint.
+        area, gradient = element_geometry(case['nodes'], case['triangles'])
+        derivative = np.einsum('teiq,eik->teqk', field[:, case['triangles'], :2], gradient)
+        divergence = derivative[:, :, 0, 0] + derivative[:, :, 1, 1]
+        return dict(pde_residual_rmse=np.nan, kinematic_rmse=np.nan,
+                    velocity_p1_divergence_rmse=float(np.sqrt(np.average(divergence ** 2, axis=1, weights=area).mean())),
+                    pressure_mean_absolute=float(np.abs(np.average(field[:, :, 2], axis=1, weights=node_weights(case))).mean()))
     values, masks, scalar, scalar_masks = known_inputs(case, mode, np.random.default_rng(seed))
     pde = case['meta']['pde']; n = len(case['nodes'])
     result = dict(pde_residual_rmse=float('nan'), kinematic_rmse=float('nan'))
@@ -73,7 +84,8 @@ def residual_diagnostics(case, field, times, mode, seed, coefficient):
         return result
     physical = case['meta'].get('parameters', {})
     operator = (case['element_coefficient'][:, None] if 'element_coefficient' in case else values[:, 3]) if masks[:, 3].all() else a
-    mass, stiffness = assemble(case, operator ** (2 if pde in WAVES else 1), physical.get('advection'), physical.get('reaction', 0.))
+    mass, stiffness = (helmholtz_operator(case, operator, check_coercivity=False) if pde == 'helmholtz' else
+                       assemble(case, operator ** (2 if pde in WAVES else 1), physical.get('advection'), physical.get('reaction', 0.)))
     lump = np.asarray(mass.sum(axis=1)).ravel()
     if pde == 'eikonal':
         return result  # a nonsmooth distance field has no elliptic weak residual
@@ -142,8 +154,11 @@ def append_rows(path, rows):
 
 
 def numerical_reference(case, levels):
+    case = reference_case(case)
     if not levels:
         return case
+    if case['meta']['pde'] == 'navier_stokes':
+        raise ValueError('For NS choose --solver-resolution during generation; eval --refine is scalar-only')
     previous = case; convergence = []
     meta = case['meta']; pde = meta['pde']
     for level in range(1, levels + 1):
@@ -155,7 +170,8 @@ def numerical_reference(case, levels):
         if pde == 'eikonal':
             a = meta['coefficient']
         result, _ = solve(refined, pde, refined['source'], refined['initial_u'], refined['initial_v'],
-                          a, meta['beta'], len(case['times']), meta['solver'].get('time_step', .002) / 2 ** level)
+                          a, meta['beta'], len(case['times']), meta['solver'].get('time_step', .002) / 2 ** level,
+                          time_end=float(case['times'][-1]) if len(case['times']) > 1 else 1.)
         refined.update(result)
         coords = np.concatenate([np.column_stack([refined['nodes'], np.full(len(refined['nodes']), t)]) for t in case['times']])
         old = interpolate(previous, coords).reshape(len(case['times']), -1, 2)
@@ -178,20 +194,22 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
     No reference solution or numerical solve is used by this function.
     """
     device = context['global_h'].device
+    scales = case_scales(scales, case)
+    channels = 3 if case['meta']['pde'] == 'navier_stokes' else 2
     with torch.no_grad():
         latent_contexts = [model.with_latent(context, z) for z in latents] if latents is not None else [context]
     from .wave import initial_diagnostics
     diagnostics = initial_diagnostics(latent_contexts)
-    size = (len(coords), 2)
+    size = (len(coords), channels)
     mean = np.empty(size, np.float32)
     std = np.full(size, np.nan, np.float32); lower = std.copy(); upper = std.copy()
     kept = np.empty((min(save_samples, len(latent_contexts)), *size), np.float32) if latents is not None else np.empty((0, *size), np.float32)
-    sample_squared = np.zeros((len(latent_contexts), 2))
+    sample_squared = np.zeros((len(latent_contexts), channels))
     with torch.no_grad():
         for start in range(0, len(coords), chunk):
             stop = min(start + chunk, len(coords))
             queries = query_input(case, coords[start:stop], device)
-            fields = np.stack([model.decode(c, queries).cpu().numpy() for c in latent_contexts])
+            fields = np.stack([model.decode(c, queries).cpu().numpy()[:, :channels] for c in latent_contexts])
             fields *= np.asarray(scales['output'], np.float32)
             if not np.isfinite(fields).all():
                 raise RuntimeError('non-finite field prediction; no metrics saved for this case')
@@ -229,12 +247,16 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
     """One independent physical case: all modes, sensors, methods and grids."""
     path = Path(path); out = Path(out)
     case = load_case(path); meta = case['meta']; pde = meta['pde']
+    vector = pde == 'navier_stokes'; channels = 3 if vector else 2
+    scales = case_scales(scales, case)
+    if vector and not (model is not None and model_config and model_config.get('model') == 'A' and model_config.get('vector_output')):
+        raise ValueError('Navier-Stokes evaluation requires an A --joint-conditioning --vector-output checkpoint')
     reference = numerical_reference(case, options['refine'])
     if options['refine']:
         write_rows(out / f'refinement_{path.stem}.csv', reference['refinement_rows'])
     indices = np.unique(np.linspace(0, len(case['times']) - 1, min(options['frames'], len(case['times']))).round().astype(int))
     times = case['times'][indices]; tw = time_weights(times)
-    if (options.get('filtered') and pde in WAVES or
+    if (vector and len(case['times']) > 1 or options.get('filtered') and pde in WAVES or
             model_config and model_config.get('model') in ('E', 'F') and pde in PARABOLIC + WAVES):
         times = np.linspace(case['times'][0], case['times'][-1], options['frames'])
         tw = time_weights(times)
@@ -298,7 +320,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                             interpolate(reference, nodal_coords) if is_b else None,
                                                             (tw[:, None] * node_weights(case)[None]).ravel() if is_b else None)
                 sync(device); nodal_seconds = time.perf_counter() - started
-                nodal = nodal.reshape(len(times), -1, 2)
+                nodal = nodal.reshape(len(times), -1, channels)
                 extra.update(nodal_spread.get('diagnostics', {}))
                 coefficient = extra.get('coefficient_prediction', coefficient)
                 diagnostics = residual_diagnostics(case, nodal, times, mode, draw_seed, coefficient)
@@ -326,12 +348,14 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                        evolution_rule=extra['evolution_rule'])
                 boundary = np.sqrt(np.mean(nodal[:, case['boundary_nodes']] ** 2, axis=(0, 1)))
                 initial = np.sqrt(np.average((nodal[0] - interpolate(reference, nodal_coords[:len(case['nodes'])])) ** 2,
-                                             axis=0, weights=node_weights(case))) if len(case['times']) > 1 else np.full(2, np.nan)
+                                             axis=0, weights=node_weights(case))) if len(case['times']) > 1 else np.full(channels, np.nan)
+                if vector:
+                    boundary[2] = initial[2] = np.nan  # Pressure has neither a no-slip BC nor an independent IC.
                 generalization = ('unseen_family' if model_config and model_config.get('training_geometries') and
                                   meta['geometry'] not in model_config['training_geometries'] else 'new_case_and_instance')
                 for grid, (points, spatial, grid_arrays) in grids:
                     coords = np.concatenate([np.column_stack([points, np.full(len(points), t)]) for t in times])
-                    truth = interpolate(reference, coords).reshape(len(times), -1, 2)
+                    truth = interpolate(reference, coords).reshape(len(times), -1, channels)
                     coarse = interpolate(case, coords).reshape(truth.shape)
                     if grid == 0:
                         field, spread, elapsed = nodal, nodal_spread, setup_seconds + nodal_seconds
@@ -348,9 +372,9 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                         field = prediction.reshape(truth.shape)
                     weights = tw[:, None] * spatial[None]
                     std, lower, upper = [spread[k].reshape(truth.shape) for k in ('sample_std', 'lower', 'upper')]
-                    for channel in range(2 if pde in WAVES else 1):
+                    for channel in range(len(quantities(case))):
                         base = dict(case=path.name, seed=draw_seed, tier=meta['tier'], pde=pde, geometry=meta['geometry'],
-                                    mode=mode, observations=count, method=method, quantity='u' if channel == 0 else 'v',
+                                    mode=mode, observations=count, method=method, quantity=quantities(case)[channel],
                                     geometry_generalization=generalization, grid=grid, refine=options['refine'], samples=samples,
                                     flow_steps=options['flow_steps'] if samples else 0, valid_points=len(points),
                                     observation_noise=options['noise'], reference_times=','.join(f'{t:.12g}' for t in times),
@@ -405,7 +429,12 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                                         **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave',
                                                                                                       'modal_evolution', 'initial_aware_evolution', 'evolution_rule') if key in extra},
                                                                         **{key: extra[key] for key in MAP_STATS if key in extra}))))
-                        _, field_mask, _, scalar_mask = known_inputs(case, mode, np.random.default_rng(draw_seed))
+                        if vector:
+                            field_mask = inputs['field_masks'].cpu().numpy(); scalar_mask = inputs['scalar_masks'].cpu().numpy()
+                            arrays.update(known_forcing_y_mask=inputs['forcing_y_mask'].cpu().numpy(),
+                                known_field_names=np.array(['forcing_x', 'initial_velocity_x', 'initial_velocity_y', 'viscosity']))
+                        else:
+                            _, field_mask, _, scalar_mask = known_inputs(case, mode, np.random.default_rng(draw_seed))
                         arrays.update(known_field_mask=field_mask.astype(bool), known_scalar_mask=scalar_mask.astype(bool))
                         if latents is not None:
                             arrays['latents'] = latents.detach().cpu().numpy()
@@ -499,8 +528,8 @@ def evaluate(args, baseline=False):
     if any(not p.exists() for p in paths):
         raise ValueError('selected dataset cases are missing')
     counts = [int(n) for n in args.observations.split(',')]
-    if any(m not in MODES for m in modes) or min(counts) < 0 or args.noise <= 0:
-        raise ValueError('valid modes, nonnegative counts, and positive Gaussian noise required')
+    if any(m not in MODES for m in modes) or min(counts) < 0 or args.noise < 0:
+        raise ValueError('valid modes and nonnegative counts/noise required')
     model = None; config = {}
     if not baseline:
         checkpoint = load_checkpoint(Path(args.run) / args.checkpoint, device)
@@ -516,6 +545,8 @@ def evaluate(args, baseline=False):
                   if args.normalization_run else normalization(load_case(p) for p in case_paths(args.data, 'train')))
         tier = json.loads((Path(args.data) / 'manifest.json').read_text())['config']['tier']
         methods = args.methods.split(',') if args.methods else ['prior', 'rbf'] + (['ridge', 'bayes'] if tier == 'T1' else (['grid'] if tier == 'T2' else []))
+        if args.noise == 0 and set(methods).intersection({'bayes', 'pod', 'gp', 'map', 'grid'}):
+            raise ValueError('These likelihood baselines require positive noise; noiseless neural evaluation and prior/rbf remain available')
         for method in methods:
             if method not in METHODS:
                 raise ValueError(f'unknown baseline {method}; choose {METHODS}')
@@ -528,11 +559,12 @@ def evaluate(args, baseline=False):
                    samples=getattr(args, 'samples', 0), flow_steps=getattr(args, 'flow_steps', 0),
                    save_samples=getattr(args, 'save_samples', 0), interval=getattr(args, 'interval', .9))
     (out / 'evaluation.json').write_text(json.dumps(dict(options, methods=methods, scales=scales,
-        model_options={key: config.get(key) for key in ('model', 'initial_latent', 'assimilation', 'infer_operator', 'flow',
+        model_options={key: config.get(key) for key in ('model', 'joint_conditioning', 'vector_output', 'initial_latent', 'assimilation', 'infer_operator', 'flow',
                                                        'f_variant', 'f_steps', 'align_weight', 'f_architecture',
                                                        'b_routing', 'b_info_rank', 'b_tau', 'b_info_updates', 'b_latent_dim')},
         cases=[str(p.resolve()) for p in paths], data=str(Path(args.data).resolve()),
-        reference='stored P1 fields' if not args.refine else 'refined FEM with prolonged original P1 physical inputs; observations unchanged',
+        reference=('stored FEM fields: P1 scalar/pressure, P2 NS velocity; linear interpolation in physical time'
+                   if not args.refine else 'refined FEM with prolonged original P1 physical inputs; observations unchanged'),
         uncertainty='empirical flow intervals are not claimed calibrated; T1/G1 Gaussian elliptic Bayes exact only for stored discrete Gaussian model'), indent=2))
     # Per-case CSVs and appended metrics survive interruption. Final order is case order.
     (out / 'metrics.csv').write_text(''); (out / 'skipped.csv').write_text('')

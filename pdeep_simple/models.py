@@ -33,6 +33,9 @@ PDE_GRAPHS += [
     ([0, 1, 4, 5, 1, 6], [(0, 1), (1, 3), (2, 3), (3, 4), (4, 5)]),  # p-Laplacian
     ([0, 1, 8, 4], [(0, 1), (1, 2), (2, 3)]),  # gradient norm = reciprocal speed
 ]
+# Original scalar-family IDs and weights remain unchanged. Helmholtz needs the
+# directed graph (power and subtraction); NS uses the opt-in vector configuration.
+PDE_GRAPHS += [None, PDE_GRAPHS[4], None]
 
 
 def mlp(inputs, width, outputs):
@@ -72,7 +75,7 @@ class OperatorGraphLayer(nn.Module):
 
 
 class PhysicalEncoder(nn.Module):
-    def __init__(self, width, heads, joint_conditioning=False):
+    def __init__(self, width, heads, joint_conditioning=False, vector_output=False):
         super().__init__()
         self.mesh_input = mlp(15, width, width)
         self.basis_input = mlp(3, width, width)
@@ -84,15 +87,21 @@ class PhysicalEncoder(nn.Module):
         self.obs_attention = nn.MultiheadAttention(width, heads, batch_first=True)
         self.global_net = mlp(3 * width, width, width)
         self.joint_conditioning = joint_conditioning
+        self.vector_output = vector_output
         if joint_conditioning:
             from .operator_graph import NODE_TYPES
             self.pde_types = nn.Embedding(len(NODE_TYPES), width)
             self.pde_message = nn.ModuleList([OperatorGraphLayer(width) for _ in range(2)])
             self.pde_numbers = mlp(8, width, width)
-            self.field_refs = nn.Embedding(5, width)
+            self.field_refs = nn.Embedding(6 if vector_output else 5, width)
             self.basis_channels = nn.Embedding(4, width)
+        if vector_output:
+            self.vector_input = mlp(2, width, width)
 
     def forward(self, inputs):
+        from .data import PDES
+        if PDES[inputs['pde']] == 'navier_stokes' and not self.vector_output:
+            raise ValueError('Navier-Stokes requires A --joint-conditioning --vector-output')
         basis = inputs['basis']
         xy = inputs['nodes'][:, None].expand(-1, basis.shape[1], -1)
         if basis.shape[1]:
@@ -104,6 +113,8 @@ class PhysicalEncoder(nn.Module):
         else:
             prior_features = torch.zeros((len(basis), self.null.shape[-1]), device=basis.device)
         h = self.mesh_input(inputs['features']) + prior_features
+        if 'vector_features' in inputs:
+            h = h + self.vector_input(inputs['vector_features'])
         for layer in self.graph:
             h = layer(h, inputs['nodes'], inputs['edges'])
         if self.joint_conditioning:
@@ -118,6 +129,8 @@ class PhysicalEncoder(nn.Module):
                 coefficient_node = p[graph['fields'] == 4][0]
                 p = torch.cat([p, self.basis_input(inputs['coefficient_samples']) + coefficient_node])
         else:
+            if PDE_GRAPHS[inputs['pde']] is None:
+                raise ValueError('This PDE requires the directed graph: use A --joint-conditioning or B for Helmholtz; NS additionally requires A --vector-output')
             types, edges = PDE_GRAPHS[inputs['pde']]
             p = self.pde_types(torch.tensor(types, device=h.device))
             adjacency = torch.zeros(len(types), len(types), device=h.device)
@@ -196,9 +209,9 @@ class AttentionBlock(nn.Module):
 
 class ObservationBias(nn.Module):
     """Per-head sensor logit bias; signed, scaled space/time and normalized noise."""
-    def __init__(self, heads):
+    def __init__(self, heads, quantities=2):
         super().__init__()
-        self.quantity = nn.Embedding(2, 8)  # Existing IDs: scalar/u=0, wave v=1.
+        self.quantity = nn.Embedding(quantities, 8)
         self.network = mlp(13, 32, heads)
 
     def forward(self, context, coords):
@@ -215,23 +228,30 @@ class ObservationBias(nn.Module):
 
 
 class AGeo(nn.Module):
-    def __init__(self, width, layers, heads, memory, joint_conditioning=False):
+    def __init__(self, width, layers, heads, memory, joint_conditioning=False, vector_output=False):
         super().__init__()
+        if vector_output and not joint_conditioning:
+            raise ValueError('Vector-output A requires joint conditioning')
         self.joint_conditioning = joint_conditioning
-        self.encoder = PhysicalEncoder(width, heads, joint_conditioning)
+        self.vector_output = vector_output
+        self.encoder = PhysicalEncoder(width, heads, joint_conditioning, vector_output)
         self.tokens = nn.Parameter(torch.randn(memory, width) * .02)
         self.aggregate = AttentionBlock(width, heads)
         self.coordinates = Coordinates(width)
         self.local = nn.Linear(3 * width, width)
         self.decoder = nn.ModuleList([AttentionBlock(width, heads) for _ in range(layers)])
-        self.output = mlp(width, width, 2)
+        self.output = mlp(width, width, 3 if vector_output else 2)
         self.parameter = mlp(width, width, 1)
         if joint_conditioning:
             self.mesh_fusion = AttentionBlock(width, heads)
-            self.observation_bias = ObservationBias(heads)
+            self.observation_bias = ObservationBias(heads, 3 if vector_output else 2)
             self.register_buffer('_joint_version', torch.tensor(1))
+        if vector_output:
+            self.register_buffer('_vector_version', torch.tensor(1))
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        if (prefix + '_vector_version' in state_dict) != self.vector_output:
+            raise ValueError('Scalar/wave and vector-output A checkpoints are incompatible; train the new configuration from scratch')
         joint = prefix + '_joint_version' in state_dict
         if joint != self.joint_conditioning:
             raise ValueError('Original and joint-conditioning A checkpoints are incompatible; train the new variant from scratch')
@@ -255,7 +275,7 @@ class AGeo(nn.Module):
             context.update(observation_tokens=inputs['observations'][~inputs['observation_mask']],
                            observation_start=len(context['mesh']) + len(context['pde']) + 1,
                            relative_scale=inputs['coordinate_bounds'][1].clamp_min(1e-8),
-                           time_dependent=PDES[inputs['pde']] in PARABOLIC + WAVES)
+                           time_dependent=inputs.get('time_dependent', PDES[inputs['pde']] in PARABOLIC + WAVES))
         else:
             memory = torch.cat([context['mesh'], context['pde'], context['obs'][~context['padding']]])
         global_tokens = self.aggregate(self.tokens + context['global_h'], memory, padding)
@@ -556,7 +576,8 @@ class EGeo(AGeo):
 def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
                 fourier_bands=6, wave_modes=32, initial_latent=None, assimilation=None, infer_operator=False,
                 f_variant='base', f_steps=3, joint_conditioning=False, b_latent_dim=128,
-                b_info_rank=16, b_tau=1., b_routing='dynamic', b_info_updates=2, b_route_weight=.1):
+                b_info_rank=16, b_tau=1., b_routing='dynamic', b_info_updates=2, b_route_weight=.1,
+                vector_output=False):
     config = PRESETS[size].copy()
     if kind == 'B':
         config['layers'] = 6
@@ -580,6 +601,10 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
         if kind != 'A':
             raise ValueError('--joint-conditioning is only available for A-Geo')
         options['joint_conditioning'] = True
+    if vector_output:
+        if kind != 'A' or not joint_conditioning:
+            raise ValueError('--vector-output requires A --joint-conditioning')
+        options['vector_output'] = True
     if initial_latent is not None and initial_latent < 1:
         raise ValueError('initial-latent must be positive')
     if initial_latent is not None or assimilation or infer_operator:

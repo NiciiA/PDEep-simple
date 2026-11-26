@@ -6,17 +6,17 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import numpy as np
 import torch
-from .geometry import mesh, node_weights, sample_points, locate, interpolate, boundary_distance, GEOMETRIES
-from .physics import solve, STATIONARY, WAVES, PARABOLIC, LINEAR_ELLIPTIC
+from .geometry import mesh, node_weights, sample_points, locate, interpolate, boundary_distance, reference_case, GEOMETRIES
+from .physics import solve, time_dependent, STATIONARY, WAVES, PARABOLIC, LINEAR_ELLIPTIC
 
 DEFAULT_PDES = {'T1': ('poisson',), 'G1': ('poisson', 'heat', 'wave'),
                 'T2': ('poisson', 'heat'), 'T3': ('heat',), 'T4': ('semilinear',)}
-SUPPORTED = dict(DEFAULT_PDES, G1=LINEAR_ELLIPTIC + PARABOLIC + WAVES,
-                 T2=LINEAR_ELLIPTIC + PARABOLIC + WAVES,
-                 T3=('heat', 'diffusion'), T4=('semilinear', 'p_laplacian', 'eikonal'))
+SUPPORTED = dict(DEFAULT_PDES, G1=LINEAR_ELLIPTIC + PARABOLIC + WAVES + ('helmholtz', 'navier_stokes'),
+                 T2=LINEAR_ELLIPTIC + PARABOLIC + WAVES + ('helmholtz',),
+                 T3=('heat', 'diffusion', 'darcy'), T4=('semilinear', 'p_laplacian', 'eikonal'))
 # Keep the first four identities unchanged for existing checkpoints.
 PDES = ('poisson', 'heat', 'wave', 'semilinear', 'diffusion', 'elliptic_adr',
-        'reaction_diffusion', 'damped_wave', 'p_laplacian', 'eikonal')
+        'reaction_diffusion', 'damped_wave', 'p_laplacian', 'eikonal', 'helmholtz', 'darcy', 'navier_stokes')
 MODES = ('forward', 'inverse', 'hybrid')
 
 
@@ -36,6 +36,14 @@ def basis_fields(case, count, rng, fixed=False):
 
 
 def make_case(config, entry):
+    case = base_case(config, entry)
+    if any(config.get(key) for key in ('solver_resolution', 'solver_refinements', 'evaluation_resolution')) or entry['pde'] == 'darcy':
+        from .reference import prepare_reference
+        case = prepare_reference(case, config)
+    return case
+
+
+def base_case(config, entry):
     if config.get('settings') or entry['pde'] not in ('poisson', 'heat', 'wave', 'semilinear') or entry['geometry'] not in ('square', 'disk', 'lshape'):
         return configured_case(config, entry)
     rng = np.random.default_rng(entry['seed'])
@@ -72,7 +80,7 @@ def make_case(config, entry):
         coefficient_field = .5 + 1.5 / (1 + np.exp(-smooth))
     operator_coefficient = coefficient_field if tier == 'T4' else coefficient ** (2 if pde == 'wave' else 1)
     result, solver_info = solve(case, pde, source, initial_u, initial_v,
-                                operator_coefficient, beta, config['frames'], config['dt'])
+                                operator_coefficient, beta, config['frames'], config['dt'], time_end=config.get('time_end', 1.))
     case.update(result, source=source, initial_u=initial_u, initial_v=initial_v,
                 coefficient_fields=coefficient_field, basis=basis, amplitudes=amplitudes)
     if pde == 'wave':
@@ -117,7 +125,7 @@ def read_dataset_config(path):
         settings = tomllib.load(stream)
     allowed = {'basis': {'count', 'amplitude_mean', 'amplitude_std', 'distribution', 'scale_by_count', 'width'},
                'conditioning': {'hybrid_known_source_fraction', 'hybrid_known_initial_fraction', 'hybrid_known_coefficient_fraction'},
-               'numerics': {'resolution', 'frames', 'dt', 'newton_iterations', 'newton_tolerance', 'p_regularization'}}
+               'numerics': {'resolution', 'solver_resolution', 'solver_refinements', 'evaluation_resolution', 'frames', 'dt', 'time_end', 'newton_iterations', 'newton_tolerance', 'p_regularization'}}
     operator_keys = {'coefficient_kind', 'coefficient_basis', 'coefficient_contrast'}
     pde_keys = {'poisson': {'forcing_basis', 'conductivity'},
                 'diffusion': {'forcing_basis', 'conductivity'} | operator_keys,
@@ -127,7 +135,10 @@ def read_dataset_config(path):
                 'wave': {'displacement_basis', 'velocity_basis', 'forcing_basis', 'wave_speed', 'forcing_frequency'} | operator_keys,
                 'damped_wave': {'displacement_basis', 'velocity_basis', 'forcing_basis', 'wave_speed', 'damping', 'forcing_frequency'} | operator_keys,
                 'semilinear': {'forcing_basis', 'beta', 'conductivity'} | operator_keys,
-                'p_laplacian': {'forcing_basis', 'p'}, 'eikonal': {'speed'}}
+                'p_laplacian': {'forcing_basis', 'p'}, 'eikonal': {'speed'},
+                'helmholtz': {'forcing_basis', 'wavenumber'} | operator_keys,
+                'darcy': {'forcing_basis', 'permeability'} | operator_keys,
+                'navier_stokes': {'forcing_basis', 'viscosity', 'mode', 'initial_amplitude', 'forcing_frequency'}}
     geometry_keys = dict(rectangle={'aspect_ratio'}, ellipse={'axis_ratio'}, triangle={'apex'}, trapezoid={'top_ratio'},
                          star={'points', 'inner_ratio'}, polygon={'sides'}, annulus={'inner_ratio'},
                          cross={'arm_width'}, dumbbell={'neck_width'}, hole={'hole_radius'}, two_holes={'hole_radius'})
@@ -147,10 +158,16 @@ def configured_case(config, entry):
     rng = np.random.default_rng(entry['seed'])
     settings = config.get('settings', {}); tier, pde = config['tier'], entry['pde']
     basis_settings = settings.get('basis', {}); options = settings.get('pdes', {}).get(pde, {})
+    ns_mode = config.get('navier_stokes_mode', options.get('mode', 'steady'))
+    if ns_mode not in ('steady', 'unsteady'): raise ValueError('Navier-Stokes mode must be steady or unsteady')
+    unsteady_ns = pde == 'navier_stokes' and ns_mode == 'unsteady'
+    if unsteady_ns and entry['geometry'] != 'square':
+        raise ValueError('Unsteady Navier-Stokes currently supports the unit square (--geometries square)')
     geometry = entry['geometry']
     width, height, radius = rng.uniform(.8, 1.2), rng.uniform(.8, 1.2), rng.uniform(.4, .65)
     if tier == 'T1':
         width = height = 1.
+    if unsteady_ns: width = height = 1.
     parameters = {key: sample_setting(value, rng, key in ('points', 'sides'))
                   for key, value in settings.get('geometries', {}).get(geometry, {}).items()}
     for key in ('axis_ratio', 'apex', 'top_ratio', 'inner_ratio', 'arm_width', 'neck_width'):
@@ -181,7 +198,7 @@ def configured_case(config, entry):
         values *= np.minimum(1., boundary_distance(case) / (.2 * span.min()))[:, None]
         weights = node_weights(case)
         values /= np.maximum(np.sqrt((weights[:, None] * values ** 2).sum(0) / weights.sum()), 1e-8)
-        std = float(basis_settings.get('amplitude_std', 12. if pde == 'semilinear' else (3. if pde in STATIONARY else .5)))
+        std = float(basis_settings.get('amplitude_std', .01 if pde == 'navier_stokes' else 12. if pde == 'semilinear' else (3. if pde in STATIONARY else .5)))
         mean = float(basis_settings.get('amplitude_mean', 0.))
         if std <= 0 or not np.isfinite([mean, std]).all():
             raise ValueError('amplitude mean/std must be finite, with std > 0')
@@ -202,16 +219,21 @@ def configured_case(config, entry):
     source = field('source', options.get('forcing_basis', count if pde in STATIONARY and pde != 'eikonal' else 0)) if pde != 'eikonal' else zeros.copy()
     initial_u = field('initial_u', options.get('displacement_basis' if pde in WAVES else 'initial_basis', count)) if pde not in STATIONARY else zeros.copy()
     initial_v = field('initial_v', options.get('velocity_basis', count)) if pde in WAVES else zeros.copy()
-    coefficient_name = ('speed' if pde == 'eikonal' else 'wave_speed' if pde in WAVES else
+    coefficient_name = ('wavenumber' if pde == 'helmholtz' else 'permeability' if pde == 'darcy' else
+                        'viscosity' if pde == 'navier_stokes' else 'speed' if pde == 'eikonal' else 'wave_speed' if pde in WAVES else
                         'diffusivity' if pde in PARABOLIC or pde == 'elliptic_adr' else 'conductivity')
     default = [.03, .2] if pde in PARABOLIC else ([.5, 1.2] if pde in WAVES else [.5, 2.] if tier == 'T2' else 1.)
+    if pde == 'helmholtz': default = [.5, 1.5]
+    if pde == 'navier_stokes': default = [.1, .3]
     coefficient_range = options.get(coefficient_name, default)
     coefficient = sample_setting(coefficient_range, rng)
     if coefficient <= 0:
         raise ValueError('conductivity/diffusivity/speed must be positive')
     if pde in ('poisson', 'p_laplacian') and tier != 'T2' and coefficient != 1.:
         raise ValueError('Poisson/p_laplacian use unit conductivity; select diffusion for variable conductivity')
-    kind = options.get('coefficient_kind', 'smooth' if pde in ('diffusion', 'semilinear') and tier != 'T2' else 'constant')
+    kind = options.get('coefficient_kind', 'smooth' if pde in ('diffusion', 'semilinear', 'darcy') and tier != 'T2' else 'constant')
+    if pde == 'darcy' and tier == 'T3' and kind == 'interface':
+        raise ValueError('T3 Darcy inversion supports nodal smooth/constant permeability; hidden elementwise interfaces need a matching physical decoder')
     if kind not in ('constant', 'smooth', 'interface') or tier == 'T2' and kind != 'constant' or pde == 'eikonal' and kind != 'constant':
         raise ValueError('coefficient_kind supports constant/smooth/interface; T2 and Eikonal require constant')
     coefficient_fields = np.full(n, coefficient)
@@ -239,7 +261,7 @@ def configured_case(config, entry):
         physical['reaction'] = 0.
     if pde != 'damped_wave':
         physical['damping'] = 0.
-    if pde in STATIONARY:
+    if pde in STATIONARY and not unsteady_ns:
         physical['forcing_frequency'] = 0.
     conditioning = {key: sample_setting(value, rng) for key, value in settings.get('conditioning', {}).items()}
     if any(not 0 <= value <= 1 for value in conditioning.values()):
@@ -257,18 +279,50 @@ def configured_case(config, entry):
                 coefficient_fields if kind == 'smooth' else coefficient)
     if pde in WAVES:
         operator = operator ** 2
-    result, info = solve(case, pde, source, initial_u, initial_v, operator, beta, config['frames'], config['dt'])
+    if pde == 'navier_stokes':
+        from .navier_stokes import solve_navier_stokes
+        forcing = np.column_stack([source, field('source_y', options.get('forcing_basis', count))])
+        case.update(source_vector=forcing, boundary_velocity=np.zeros((n, 2)))
+        initial_parameters = None
+        if unsteady_ns:
+            initial_parameters = dict(amplitude=sample_setting(options.get('initial_amplitude', .02), rng),
+                                      coefficients=np.random.default_rng([entry['seed'], 5301]).normal(size=3).tolist())
+            if initial_parameters['amplitude'] < 0: raise ValueError('initial amplitude must be nonnegative')
+        result, info = solve_navier_stokes(case, forcing, coefficient, unsteady=unsteady_ns,
+            frames=config['frames'], dt=config['dt'], time_end=config.get('time_end', 1.),
+            initial_parameters=initial_parameters, forcing_frequency=physical['forcing_frequency'])
+        case['meta'].update(navier_stokes_mode=ns_mode, time_dependent=unsteady_ns)
+        if unsteady_ns: case['meta']['initial_velocity_parameters'] = initial_parameters
+    else:
+        result, info = solve(case, pde, source, initial_u, initial_v, operator, beta, config['frames'], config['dt'], time_end=config.get('time_end', 1.))
     case.update(result, source=source, initial_u=initial_u, initial_v=initial_v,
                 coefficient_fields=coefficient_fields, basis=basis,
                 amplitudes=case.get(f'{primary}_amplitudes', np.empty(0)))
     case['meta'].update(solver=info, targets=['solution'] + (['velocity'] if pde in WAVES else []) + (['coefficient'] if tier == 'T2' else []))
+    if pde in ('helmholtz', 'darcy', 'navier_stokes'):
+        from .reference import quantities
+        case['meta'].update(quantities=list(quantities(case)), boundary_condition='homogeneous no-slip' if pde == 'navier_stokes' else 'homogeneous Dirichlet')
+    if pde == 'navier_stokes':
+        from .operator_graph import navier_stokes_graph
+        graph = navier_stokes_graph(unsteady=unsteady_ns, forcing_frequency=physical['forcing_frequency'])
+        case.update(operator_node_types=np.array(graph['types']), operator_edges=np.array(graph['edges']))
+        case['meta'].update(operator_names=graph['names'], physical_quantities=['forcing_x', 'forcing_y', 'viscosity'],
+                            pressure_gauge='integral p dx = 0', conditioning_definitions={'forward': 'all physical inputs known',
+                            'inverse': 'forcing components hidden; viscosity and no-slip known', 'hybrid': 'partial forcing; viscosity and no-slip known'})
+        if unsteady_ns:
+            case['meta']['conditioning_definitions'].update(inverse='initial velocity hidden; forcing/viscosity/walls known',
+                hybrid='partial initial velocity; forcing/viscosity/walls known')
+            case['meta']['physical_quantities'] += ['initial_velocity_x', 'initial_velocity_y']
+        case['meta']['targets'] = ['velocity_x', 'velocity_y', 'pressure']
     if not all(np.isfinite(value).all() for key, value in case.items() if key != 'meta'):
         raise RuntimeError('non-finite configured case')
     return case
 
 
 def save_case(path, case):
-    arrays = {k: (v.astype(np.float32) if v.dtype.kind == 'f' and k not in ('nodes', 'times') else v)
+    coordinates = ('nodes', 'times', 'reference_nodes', 'reference_times', 'evaluation_points',
+                   'evaluation_grid_x', 'evaluation_grid_y', 'evaluation_weights')
+    arrays = {k: (v.astype(np.float32) if v.dtype.kind == 'f' and k not in coordinates else v)
               for k, v in case.items() if k != 'meta'}
     arrays['metadata'] = np.array(json.dumps(case['meta']))
     temporary = path.with_suffix('.tmp.npz')
@@ -276,9 +330,9 @@ def save_case(path, case):
     temporary.replace(path)
 
 
-def load_case(path):
+def load_case(path, load_evaluation=True):
     with np.load(path, allow_pickle=False) as saved:
-        case = {k: saved[k] for k in saved.files if k != 'metadata'}
+        case = {k: saved[k] for k in saved.files if k != 'metadata' and (load_evaluation or not k.startswith('evaluation_'))}
         case['meta'] = json.loads(str(saved['metadata']))
     return case
 
@@ -299,12 +353,31 @@ def generate(args):
     settings = read_dataset_config(args.config) if getattr(args, 'config', None) else {}
     numerics = settings.get('numerics', {})
     resolution = args.resolution if args.resolution is not None else numerics.get('resolution', 12)
+    solver_resolution = getattr(args, 'solver_resolution', None)
+    solver_refinements = getattr(args, 'solver_refinements', None)
+    evaluation_resolution = getattr(args, 'evaluation_resolution', None)
+    if solver_resolution is None and solver_refinements is None:
+        solver_resolution = numerics.get('solver_resolution')
+        solver_refinements = numerics.get('solver_refinements')
+    evaluation_resolution = numerics.get('evaluation_resolution', 0) if evaluation_resolution is None else evaluation_resolution
+    if solver_resolution is not None and solver_refinements is not None:
+        raise ValueError('choose solver-resolution or solver-refinements, not both')
+    if solver_resolution is not None and solver_resolution < resolution:
+        raise ValueError('solver-resolution must be at least model-resolution')
+    if solver_refinements is not None and solver_refinements < 0 or evaluation_resolution and evaluation_resolution < 3:
+        raise ValueError('nonnegative solver refinements and evaluation grid >=3 required')
     frames = args.frames if args.frames is not None else numerics.get('frames', 21)
     dt = args.dt if args.dt is not None else numerics.get('dt', .002)
+    time_end = getattr(args, 'time_end', None)
+    time_end = numerics.get('time_end', 1.) if time_end is None else time_end
+    if not np.isfinite(time_end) or time_end <= 0: raise ValueError('time-end must be positive and finite')
     pdes = args.pdes.split(',') if args.pdes else list(DEFAULT_PDES[args.tier])
     geometries = args.geometries.split(',')
     if not pdes or any(p not in SUPPORTED[args.tier] for p in pdes):
         raise ValueError(f'{args.tier} supports only {SUPPORTED[args.tier]}')
+    if 'navier_stokes' in pdes:
+        from .navier_stokes import require_backend
+        require_backend()
     if any(g not in GEOMETRIES for g in geometries):
         raise ValueError(f'geometries: {GEOMETRIES}')
     if args.tier == 'T1' and geometries != ['square']:
@@ -316,6 +389,10 @@ def generate(args):
     config = dict(generator_version=1, tier=args.tier, pdes=pdes, geometries=geometries, train=args.train,
                   val=args.val, test=args.test, resolution=resolution, frames=frames,
                   dt=dt, seed=args.seed)
+    if time_end != 1.: config['time_end'] = time_end
+    if getattr(args, 'navier_stokes_mode', None): config['navier_stokes_mode'] = args.navier_stokes_mode
+    for key, value in (('solver_resolution', solver_resolution), ('solver_refinements', solver_refinements), ('evaluation_resolution', evaluation_resolution)):
+        if value is not None and value != 0: config[key] = value
     if settings:
         config['settings'] = settings
     if dt > .005 and any(p in WAVES + PARABOLIC for p in pdes):
@@ -382,19 +459,46 @@ def case_paths(root, split, geometries=None):
 
 def normalization(cases):
     """Global training-distribution scales, never held-out target magnitudes."""
-    totals = np.zeros(2); fields = np.zeros(4); count = 0
+    def bucket(vector):
+        return dict(count=0, output=np.zeros(3 if vector else 2), fields=np.zeros(5 if vector else 4), vector=vector)
+    scalar, vector = bucket(False), bucket(True); families = {}
     for case in cases:
-        count += 1
+        is_vector = case['meta']['pde'] == 'navier_stokes'
         w = node_weights(case); w /= w.sum()
-        totals[0] += np.mean(case['solution'] ** 2 @ w)
-        totals[1] += np.mean(case.get('velocity', np.zeros_like(case['solution'])) ** 2 @ w)
-        for i, name in enumerate(('source', 'initial_u', 'initial_v', 'coefficient_fields')):
-            fields[i] += np.dot(w, case[name] ** 2)
-    return dict(output=np.maximum(np.sqrt(totals / count), .01).tolist(),
-                fields=np.maximum(np.sqrt(fields / count), .01).tolist())
+        reference = reference_case(case); rw = node_weights(reference); rw /= rw.sum()
+        if is_vector:
+            outputs = np.einsum('tnq,n->q', reference['solution_fields'] ** 2, rw) / len(reference['times'])
+            initial = case.get('initial_velocity', np.zeros_like(case['source_vector']))
+            physical = np.column_stack([case['source_vector'], initial, case['coefficient_fields']])
+            fields = (physical ** 2 * w[:, None]).sum(0)
+        else:
+            outputs = np.array([np.mean(reference['solution'] ** 2 @ rw),
+                                np.mean(reference.get('velocity', np.zeros_like(reference['solution'])) ** 2 @ rw)])
+            fields = np.array([np.dot(w, case[name] ** 2) for name in ('source', 'initial_u', 'initial_v', 'coefficient_fields')])
+        family = families.setdefault(case['meta']['pde'], bucket(is_vector))
+        for totals in (vector if is_vector else scalar, family):
+            totals['count'] += 1; totals['output'] += outputs; totals['fields'] += fields
+    def finish(totals):
+        floor = 1e-8 if totals['vector'] else .01
+        result = dict(output=np.maximum(np.sqrt(totals['output'] / totals['count']), floor).tolist(),
+                      fields=np.maximum(np.sqrt(totals['fields'] / totals['count']), floor).tolist())
+        if totals['vector']:
+            result.update(quantities=['velocity_x', 'velocity_y', 'pressure'],
+                          fields=dict(zip(('forcing_x', 'forcing_y', 'initial_velocity_x', 'initial_velocity_y', 'viscosity'), result['fields'])))
+        return result
+    result = finish(scalar if scalar['count'] else vector)
+    if scalar['count'] and vector['count']:
+        result['by_pde'] = {pde: finish(values) for pde, values in families.items()}
+    return result
+
+
+def case_scales(scales, case):
+    return scales.get('by_pde', {}).get(case['meta']['pde'], scales)
 
 
 def known_inputs(case, mode, rng):
+    if case['meta']['pde'] == 'navier_stokes':
+        raise ValueError('Vector Navier-Stokes uses navier_stokes.known_physical_inputs; current scalar/wave model inputs do not support it')
     if mode not in MODES:
         raise ValueError(f'unknown mode {mode}')
     meta = case['meta']; pde = meta['pde']
@@ -409,7 +513,7 @@ def known_inputs(case, mode, rng):
             masks[:, 3] = 0; scalar_masks[0] = 0
             if mode == 'hybrid' and pde in PARABOLIC:
                 masks[:, 1] = rng.random(len(values)) < fractions.get('hybrid_known_initial_fraction', .5)
-        elif (meta['tier'] == 'T3' and pde == 'diffusion') or pde == 'eikonal':
+        elif (meta['tier'] == 'T3' and pde in ('diffusion', 'darcy')) or pde == 'eikonal':
             masks[:, 3] = 0 if mode == 'inverse' else rng.random(len(values)) < fractions.get('hybrid_known_coefficient_fraction', .5)
             scalar_masks[0] = 0
         else:
@@ -424,9 +528,10 @@ def known_inputs(case, mode, rng):
 
 def observations(case, count, noise, rng):
     xy = sample_points(case, count, rng)
-    t = rng.uniform(0, 1, count) if len(case['times']) > 1 else np.zeros(count)
+    t = rng.uniform(case['times'][0], case['times'][-1], count) if len(case['times']) > 1 else np.zeros(count)
     queries = np.column_stack([xy, t])
-    quantity = rng.integers(0, 2, count) if case['meta']['pde'] in WAVES else np.zeros(count, int)
+    quantities = 3 if case['meta']['pde'] == 'navier_stokes' else 2 if case['meta']['pde'] in WAVES else 1
+    quantity = rng.integers(0, quantities, count) if quantities > 1 else np.zeros(count, int)
     truth = interpolate(case, queries)[np.arange(count), quantity]
     values = truth + rng.normal(0, noise, count)
     return dict(queries=queries, quantity=quantity, values=values, noise=np.full(count, noise))
@@ -434,16 +539,28 @@ def observations(case, count, noise, rng):
 
 def query_draw(case, count, rng):
     xy = sample_points(case, count, rng)
-    t = rng.uniform(0, 1, count) if len(case['times']) > 1 else np.zeros(count)
+    t = rng.uniform(case['times'][0], case['times'][-1], count) if len(case['times']) > 1 else np.zeros(count)
     queries = np.column_stack([xy, t])
     return queries, interpolate(case, queries)
 
 
 def model_input(case, mode, obs, scales, rng, device='cpu'):
-    values, masks, scalar, scalar_masks = known_inputs(case, mode, rng)
+    scales = case_scales(scales, case)
+    vector = case['meta']['pde'] == 'navier_stokes'
+    if vector:
+        from .navier_stokes import known_physical_inputs
+        physical_inputs = known_physical_inputs(case, mode, rng)
+        values = np.column_stack([physical_inputs['forcing'][:, 0], physical_inputs['initial_velocity'], case['coefficient_fields']])
+        masks = np.column_stack([physical_inputs['forcing_mask'][:, 0], physical_inputs['initial_mask'], np.ones(len(values))])
+        scalar, scalar_masks = np.array([physical_inputs['viscosity'], 0.]), np.ones(2)
+        names = ('forcing_x', 'initial_velocity_x', 'initial_velocity_y', 'viscosity')
+        field_scales = np.array([scales['fields'].get(name, .01) for name in names])
+    else:
+        values, masks, scalar, scalar_masks = known_inputs(case, mode, rng)
+        field_scales = scales['fields']
     n = len(case['nodes'])
     boundary = np.zeros(n); boundary[case['boundary_nodes']] = 1
-    features = np.column_stack([case['nodes'], boundary, values / scales['fields'], masks,
+    features = np.column_stack([case['nodes'], boundary, values / field_scales, masks,
                                 np.tile(np.r_[scalar, scalar_masks], (n, 1))])
     edges = np.concatenate([case['triangles'][:, [0, 1]], case['triangles'][:, [1, 2]],
                             case['triangles'][:, [2, 0]]])
@@ -468,7 +585,8 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
     span = np.r_[np.ptp(case['nodes'], axis=0), duration]
     result['coordinate_bounds'] = tensor(np.stack([lo, span]))
     result['output_scales'] = tensor(scales['output'])
-    result['field_scales'] = tensor(scales['fields'])
+    result['field_scales'] = tensor(field_scales)
+    result['time_dependent'] = time_dependent(case)
     # Geometry/prior declarations used by B; no hidden realizations are added.
     result['triangles'] = tensor(case['triangles'], torch.long)
     result['node_weights'] = tensor(node_weights(case))
@@ -476,6 +594,13 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
     bounds = case['meta'].get('distributions', {}).get('coefficient', [])
     bounds = bounds if isinstance(bounds, list) and len(bounds) == 2 else [0., 0.]
     result['physical_layout'] = dict(constant_coefficient=kind == 'constant', coefficient_bounds=bounds)
+    if vector:
+        fy_scale = scales['fields']['forcing_y']
+        result.update(basis=tensor(np.empty((n, 0))),
+            vector_features=tensor(np.column_stack([physical_inputs['forcing'][:, 1] / fy_scale, physical_inputs['forcing_mask'][:, 1]])),
+            forcing_y_mask=tensor(physical_inputs['forcing_mask'][:, 1]),
+            operator_metadata=dict(priors={}, forcing_frequency=case['meta'].get('parameters', {}).get('forcing_frequency', 0.)))
+        return result
     # Geometry and fully revealed operator only: no target fields enter the modal branch.
     physical = case['meta'].get('parameters', {})
     if (case['meta']['pde'] == 'wave' and masks[:, 3].all() and
@@ -516,8 +641,9 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
                            [2., physical['damping'], 1.], [3., physical['p'], 1.],
                            [4., physical['advection'][0], 1.], [5., physical['advection'][1], 1.],
                            [6., physical['forcing_frequency'], 1.]])
+        contrast_known = case['meta']['pde'] not in ('helmholtz', 'darcy') or masks[:, 3].all()
         parameters.extend([[7., ('constant', 'smooth', 'interface').index(case['meta']['coefficient_kind']), 1.],
-                           [8., case['meta']['coefficient_contrast'], 1.]])
+                           [8., case['meta']['coefficient_contrast'] if contrast_known else 0., float(contrast_known)]])
         if 'element_coefficient' in case and masks[:, 3].all():
             parameters.extend(np.column_stack([case['nodes'][case['triangles']].mean(1), case['element_coefficient']]).tolist())
         result['parameters'] = tensor(parameters)

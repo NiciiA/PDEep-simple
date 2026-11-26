@@ -11,6 +11,7 @@ from .training import load_checkpoint, model_from_config, select_device
 from .evaluation import evaluate_case, write_rows, model_label
 from .plotting import field_panel, read_csv, comparison_plots, field_loss_plots, stage_lines
 from .baselines import METHODS
+from .reference import quantities
 
 
 def load_field(path):
@@ -32,7 +33,7 @@ def uncertainty_plot(field, out, name):
     if not bayes and not gp and not field['meta'].get('samples'):
         return
     count = min(4 if field['meta']['method'] == 'E-Flow' or field['meta']['method'].startswith('F-') else 2, len(field['sample_fields']))
-    for channel in range(2 if field['meta']['pde'] in WAVES else 1):
+    for channel in range(len(quantities(field))):
         truth, mean = field['reference'][:, :, channel], field['prediction'][:, :, channel]
         std = field['sample_std'][:, :, channel]
         limits = (min(truth.min(), mean.min()), max(truth.max(), mean.max()))
@@ -52,7 +53,7 @@ def uncertainty_plot(field, out, name):
                     sensors(ax, field, t, channel)
                 else:
                     ax.text(.5, .5, 'Std needs at least two samples', ha='center'); ax.axis('off')
-        quantity = 'u' if channel == 0 else 'v'
+        quantity = field['meta'].get('quantities', ['u', 'v'])[channel]
         description = 'GP kernel uncertainty; calibration not guaranteed' if gp else 'Gaussian posterior uncertainty' if bayes else 'one latent per complete sample'
         fig.suptitle(f'{name} / {field["meta"]["mode"]} / {quantity}; {description}')
         fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(out / f'{name}_uncertainty_{quantity}.png', dpi=130); plt.close(fig)
@@ -87,7 +88,7 @@ def multiple_loss_plots(runs, out):
 
 def solution_comparison(records, out, mode):
     reference = records[0][1]
-    for channel in range(2 if reference['meta']['pde'] in WAVES else 1):
+    for channel in range(len(quantities(reference))):
         truth = reference['reference'][:, :, channel]
         predictions = [f['prediction'][:, :, channel] for _, f in records]
         limits = (min([truth.min()] + [p.min() for p in predictions]), max([truth.max()] + [p.max() for p in predictions]))
@@ -102,14 +103,14 @@ def solution_comparison(records, out, mode):
                 field_panel(axes[2 * it, col], field, prediction[it], label, limits)
                 field_panel(axes[2 * it + 1, col], field, abs(prediction[it] - truth[it]), 'Absolute error', (0., max(max_error, 1e-8)), 'magma')
                 sensors(axes[2 * it, col], field, t, channel)
-        quantity = 'u' if channel == 0 else 'v'
+        quantity = reference['meta'].get('quantities', ['u', 'v'])[channel]
         fig.suptitle(f'Same {reference["meta"]["pde"]}/{reference["meta"]["geometry"]} case / {mode} / {quantity}')
         fig.tight_layout(rect=(0, 0, 1, .96)); fig.savefig(out / f'solutions_{mode}_{quantity}.png', dpi=130); plt.close(fig)
 
 
 def conditioning_comparison(label, fields, out):
     anchor = fields[0]; modes = [f['meta']['mode'] for f in fields]
-    for channel in range(2 if anchor['meta']['pde'] in WAVES else 1):
+    for channel in range(len(quantities(anchor))):
         truth = anchor['reference'][:, :, channel]
         predictions = [f['prediction'][:, :, channel] for f in fields]
         limits = (min([truth.min()] + [p.min() for p in predictions]), max([truth.max()] + [p.max() for p in predictions]))
@@ -123,7 +124,7 @@ def conditioning_comparison(label, fields, out):
             panels += [(d[it], f'{mode} - {modes[0]}', (-bound, bound), 'coolwarm') for d, mode in zip(differences, modes[1:])]
             for ax, (value, title, scale, cmap) in zip(axes[it], panels):
                 field_panel(ax, anchor, value, title, scale, cmap)
-        quantity = 'u' if channel == 0 else 'v'
+        quantity = anchor['meta'].get('quantities', ['u', 'v'])[channel]
         fig.suptitle(f'{label} / conditioning comparison / {quantity}')
         fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(out / f'{label}_conditioning_{quantity}.png', dpi=130); plt.close(fig)
 
@@ -151,8 +152,8 @@ def compare_runs(args):
     options = dict(frames=args.frames, seed=args.seed, modes=args.modes.split(','), observations=[args.observations],
                    noise=args.noise, grids=[args.grid], refine=0, device=select_device(args.device), chunk=args.chunk,
                    samples=args.samples, flow_steps=args.flow_steps, save_samples=args.save_samples, interval=args.interval)
-    if any(m not in ('forward', 'inverse', 'hybrid') for m in options['modes']) or args.noise <= 0 or args.observations < 0:
-        raise ValueError('valid modes, nonnegative observation count and positive noise required')
+    if any(m not in ('forward', 'inverse', 'hybrid') for m in options['modes']) or args.noise < 0 or args.observations < 0:
+        raise ValueError('valid modes and nonnegative observation count/noise required')
     combined, records = [], {}
     for index, run in enumerate(runs):
         run_options = dict(options)
