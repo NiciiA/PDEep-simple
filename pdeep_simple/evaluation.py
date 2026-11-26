@@ -30,6 +30,12 @@ def write_rows(path, rows):
         writer.writeheader(); writer.writerows(rows)
 
 
+def model_label(config):
+    if config['model'] == 'F':
+        return 'F-' + config.get('f_variant', 'base').capitalize() + ('-Flow' if config.get('flow') else '')
+    return config['model'] + ('-Flow' if config.get('flow') else '-Geo')
+
+
 def time_weights(times):
     if len(times) == 1:
         return np.ones(1)
@@ -186,12 +192,14 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
             fields *= np.asarray(scales['output'], np.float32)
             if not np.isfinite(fields).all():
                 raise RuntimeError('non-finite field prediction; no metrics saved for this case')
-            mean[start:stop] = fields.mean(0)
+            # Keep identical F samples at exactly zero spread, including known Forward states.
+            statistics = fields.astype(np.float64) if hasattr(getattr(model, 'base', model), 'f_variant') else fields
+            mean[start:stop] = statistics.mean(0)
             if latents is not None:
                 kept[:, start:stop] = fields[:len(kept)]
                 if len(fields) > 1:
-                    std[start:stop] = fields.std(0, ddof=1)
-                    lower[start:stop], upper[start:stop] = np.quantile(fields, [(1 - interval) / 2, (1 + interval) / 2], axis=0)
+                    std[start:stop] = statistics.std(0, ddof=1)
+                    lower[start:stop], upper[start:stop] = np.quantile(statistics, [(1 - interval) / 2, (1 + interval) / 2], axis=0)
     return mean, dict(sample_std=std, lower=lower, upper=upper, sample_fields=kept, diagnostics=diagnostics)
 
 
@@ -219,7 +227,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
     indices = np.unique(np.linspace(0, len(case['times']) - 1, min(options['frames'], len(case['times']))).round().astype(int))
     times = case['times'][indices]; tw = time_weights(times)
     if (options.get('filtered') and pde in WAVES or
-            model_config and model_config.get('model') == 'E' and pde in PARABOLIC + WAVES):
+            model_config and model_config.get('model') in ('E', 'F') and pde in PARABOLIC + WAVES):
         times = np.linspace(case['times'][0], case['times'][-1], options['frames'])
         tw = time_weights(times)
     draw_seed = int(np.random.SeedSequence([options['seed'], meta['seed']]).generate_state(1)[0])
@@ -250,7 +258,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                     inputs = model_input(case, mode, obs, scales, np.random.default_rng(draw_seed), device)
                     with torch.no_grad():
                         context = model.encode(inputs)
-                        if model_config and model_config.get('model') == 'E':
+                        if model_config and model_config.get('model') in ('E', 'F'):
                             basis = context.get('wave')
                             extra.update(modal_wave=pde in WAVES and basis is not None,
                                          initial_aware_wave=pde in WAVES and 'wave_initial' in context,
@@ -275,15 +283,20 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                 extra.update(nodal_spread.get('diagnostics', {}))
                 coefficient = extra.get('coefficient_prediction', coefficient)
                 diagnostics = residual_diagnostics(case, nodal, times, mode, draw_seed, coefficient)
-                if model_config and model_config.get('model') == 'E':
+                if model_config and model_config.get('model') in ('E', 'F'):
                     if any(model_config.get(key) for key in ('initial_latent', 'assimilation', 'infer_operator')):
                         diagnostics.setdefault('operator_inferred', 0.)
-                    if model_config.get('assimilation'):
+                    if model_config.get('assimilation') or model_config.get('model') == 'F':
                         diagnostics.setdefault('assimilation_applied', 0.)
                         # Keep CSV columns stable for zero sensors and non-wave cases.
                         for when in ('before', 'after'):
                             for quantity in ('normalized', 'noise_weighted', 'u', 'v'):
                                 diagnostics.setdefault(f'observation_{quantity}_rmse_{when}', np.nan)
+                    if model_config.get('model') == 'F':
+                        diagnostics['refinement_steps'] = 0.
+                        if model_config.get('f_variant') == 'observable':
+                            diagnostics.update({key: np.nan for key in ('latent_mean_variance', 'latent_strong_directions',
+                                                                       'latent_weak_directions', 'latent_effective_directions')})
                 diagnostics.update({key: value for key, value in nodal_spread.get('diagnostics', {}).items()
                                     if key != 'coefficient_prediction'})
                 if 'modal_wave' in extra:
@@ -325,7 +338,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                       coefficient_true=meta['coefficient'] if meta['tier'] == 'T2' else np.nan,
                                       coefficient_absolute=abs(coefficient - meta['coefficient']) if coefficient is not None else np.nan,
                                       **diagnostics, **{key: extra.get(key, '' if key == 'map_message' else np.nan) for key in MAP_STATS})
-                        if model_config and model_config.get('model') == 'E' and model_config.get('initial_latent'):
+                        if model_config and model_config.get('model') in ('E', 'F') and model_config.get('initial_latent'):
                             initial_std = nodal_spread['sample_std'].reshape(nodal.shape)[0, :, channel]
                             common['initial_sample_std_mean'] = float(np.average(initial_std, weights=node_weights(case))) if np.isfinite(initial_std).all() else np.nan
                         for it in [None] + list(range(len(times))):
@@ -357,6 +370,8 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                                         pod_rank=extra.get('pod_rank'),
                                                                         **{key: model_config[key] for key in ('initial_latent', 'assimilation', 'infer_operator')
                                                                            if model_config and model_config.get(key)},
+                                                                        **{key: model_config[key] for key in ('f_variant', 'f_steps', 'f_architecture')
+                                                                           if model_config and model_config.get('model') == 'F' and key in model_config},
                                                                         **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave',
                                                                                                       'modal_evolution', 'initial_aware_evolution', 'evolution_rule') if key in extra},
                                                                         **{key: extra[key] for key in MAP_STATS if key in extra}))))
@@ -464,7 +479,7 @@ def evaluate(args, baseline=False):
         if args.samples < 1 or args.flow_steps < 1 or args.save_samples < 0 or not 0 < args.interval < 1:
             raise ValueError('positive samples/flow-steps, nonnegative save-samples and interval in (0,1) required')
         model = model_from_config(config, device); model.load_state_dict(checkpoint['model']); model.eval()
-        methods = [config['model'] + ('-Flow' if config.get('flow') else '-Geo')]
+        methods = [model_label(config)]
     else:
         scales = (json.loads((Path(args.normalization_run) / 'config.json').read_text())['scales']
                   if args.normalization_run else normalization(load_case(p) for p in case_paths(args.data, 'train')))
@@ -482,7 +497,8 @@ def evaluate(args, baseline=False):
                    samples=getattr(args, 'samples', 0), flow_steps=getattr(args, 'flow_steps', 0),
                    save_samples=getattr(args, 'save_samples', 0), interval=getattr(args, 'interval', .9))
     (out / 'evaluation.json').write_text(json.dumps(dict(options, methods=methods, scales=scales,
-        model_options={key: config.get(key) for key in ('model', 'initial_latent', 'assimilation', 'infer_operator', 'flow')},
+        model_options={key: config.get(key) for key in ('model', 'initial_latent', 'assimilation', 'infer_operator', 'flow',
+                                                       'f_variant', 'f_steps', 'align_weight', 'f_architecture')},
         cases=[str(p.resolve()) for p in paths], data=str(Path(args.data).resolve()),
         reference='stored P1 fields' if not args.refine else 'refined FEM with prolonged original P1 physical inputs; observations unchanged',
         uncertainty='empirical flow intervals are not claimed calibrated; T1/G1 Gaussian elliptic Bayes exact only for stored discrete Gaussian model'), indent=2))

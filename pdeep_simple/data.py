@@ -514,6 +514,21 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
         if 'element_coefficient' in case and masks[:, 3].all():
             parameters.extend(np.column_stack([case['nodes'][case['triangles']].mean(1), case['element_coefficient']]).tolist())
         result['parameters'] = tensor(parameters)
+    # Explicitly known equation settings for optional A joint conditioning.
+    # Coefficient/beta values are deliberately absent: graph construction reads
+    # their masked scalar/field inputs instead, never the original metadata.
+    result['operator_metadata'] = dict(
+        reaction=physical.get('reaction', 0.), damping=physical.get('damping', 0.),
+        p=physical.get('p', 3.), forcing_frequency=physical.get('forcing_frequency', 0.),
+        advection_x=physical.get('advection', [0., 0.])[0], advection_y=physical.get('advection', [0., 0.])[1],
+        p_regularization=case['meta'].get('numerics', {}).get('p_regularization', 1e-4),
+        # Legacy unconfigured T4 passes its coefficient field to solve directly;
+        # configured waves pass squared speed. Match that historical convention.
+        wave_coefficient_power=1 if case['meta']['tier'] == 'T4' and 'parameters' not in case['meta'] else 2,
+        priors=case['meta'].get('field_priors', {}))
+    if 'element_coefficient' in case and masks[:, 3].all() and case['meta']['pde'] != 'p_laplacian':
+        result['coefficient_samples'] = tensor(np.column_stack([
+            case['nodes'][case['triangles']].mean(1), case['element_coefficient'] / scales['fields'][3]]))
     return result
 
 

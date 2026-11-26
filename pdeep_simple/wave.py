@@ -132,7 +132,8 @@ def observation_inputs(context, inputs):
     obs = inputs['observations'][~inputs['observation_mask']]
     context['assimilation_observations'] = obs
     if 'assimilation_queries' not in context and len(obs):
-        vertices, bary = locate(inputs['wave_geometry'], obs[:, :2].detach().cpu().numpy())
+        geometry = inputs.get('wave_geometry', inputs.get('evolution_geometry'))
+        vertices, bary = locate(geometry, obs[:, :2].detach().cpu().numpy())
         context['assimilation_queries'] = dict(coords=obs[:, :3].detach(),
             vertices=torch.as_tensor(vertices, dtype=torch.long, device=obs.device),
             bary=torch.as_tensor(bary, dtype=obs.dtype, device=obs.device))
@@ -151,13 +152,15 @@ def speed_context(context, log_speed):
 
 def assimilate(model, context):
     """Conditional modal Gaussian update; one scalar GN step for inferred speed."""
+    if context.get('f_refinement'):
+        return model.refine(context)
     obs = context['assimilation_observations']
     context = dict(context, assimilation_applied=False)
     if not len(obs):
         return context
     prior = observed_values(model, context)
     context['observation_error_before'] = prior - obs[:, 4]
-    if context.get('operator_inferred'):
+    if context.get('operator_inferred') and 'geometry_omega' in context:
         log_speed = context['log_coefficient']
         plus = observed_values(model, speed_context(context, log_speed + .001))
         minus = observed_values(model, speed_context(context, log_speed - .001))
@@ -178,6 +181,9 @@ def assimilate(model, context):
         phi, projection, omega = basis['phi'], basis['projection'], basis['omega']
         psi_u = phi * (1 - inputs['field_masks'][:, 1:2]) * scale[0]
         psi_v = phi * (1 - inputs['field_masks'][:, 2:3]) * scale[1]
+        first_order = context.get('evolution_kind') in ('heat', 'reaction_diffusion')
+        if first_order:
+            psi_v = torch.zeros_like(psi_v)
         if bool(psi_u.any() or psi_v.any()):
             queries = context['assimilation_queries']
             def at_nodes(values):
@@ -185,11 +191,25 @@ def assimilate(model, context):
             phi_obs, u_obs, v_obs = at_nodes(phi), at_nodes(psi_u), at_nodes(psi_v)
             a, b = projection @ psi_u, projection @ psi_v
             time = queries['coords'][:, 2:3] - context['wave_t0']
-            cosine, sine = (time * omega).cos(), (time * omega).sin()
-            displacement = torch.cat([u_obs + (phi_obs * (cosine - 1)) @ a,
-                                      time * v_obs + (phi_obs * (sine / omega - time)) @ b], -1)
-            velocity = torch.cat([(phi_obs * (-omega * sine)) @ a,
-                                  v_obs + (phi_obs * (cosine - 1)) @ b], -1)
+            if first_order:
+                decay = (-time * context['diffusion_rates']).exp()
+                displacement = torch.cat([u_obs + (phi_obs * (decay - 1)) @ a, torch.zeros_like(v_obs)], -1)
+                velocity = torch.zeros_like(displacement)
+            elif 'damped_trajectory' in context:
+                zeros, ones = torch.zeros_like(omega), torch.ones_like(omega)
+                duration = inputs['coordinate_bounds'][1, 2]
+                ta, dt = damped_trajectory(omega, ones, zeros, zeros, inputs['damping'], 0., context['wave_t0'], duration)
+                tb, _ = damped_trajectory(omega, zeros, ones, zeros, inputs['damping'], 0., context['wave_t0'], duration)
+                ca, va = trajectory_values(ta, dt, time); cb, vb = trajectory_values(tb, dt, time)
+                displacement = torch.cat([u_obs + (phi_obs * (ca - 1)) @ a,
+                                          time * v_obs + (phi_obs * (cb - time)) @ b], -1)
+                velocity = torch.cat([(phi_obs * va) @ a, v_obs + (phi_obs * (vb - 1)) @ b], -1)
+            else:
+                cosine, sine = (time * omega).cos(), (time * omega).sin()
+                displacement = torch.cat([u_obs + (phi_obs * (cosine - 1)) @ a,
+                                          time * v_obs + (phi_obs * (sine / omega - time)) @ b], -1)
+                velocity = torch.cat([(phi_obs * (-omega * sine)) @ a,
+                                      v_obs + (phi_obs * (cosine - 1)) @ b], -1)
             matrix = torch.where(obs[:, 3:4] == 0, displacement, velocity) / scale[obs[:, 3].long(), None]
             # Small double-precision system; MPS solves on CPU, with gradients retained.
             device = matrix.device if matrix.device.type != 'mps' else torch.device('cpu')
@@ -202,6 +222,8 @@ def assimilate(model, context):
             context = dict(context, wave_initial=context['wave_initial'] + torch.stack([psi_u @ da, psi_v @ db], -1),
                            wave_a=context['wave_a'] + a @ da, wave_b=context['wave_b'] + b @ db,
                            assimilation_applied=True)
+            if 'damped_trajectory' in context:
+                context['damped_trajectory'] = context['damped_trajectory'] + ta * (a @ da)[None, :, None] + tb * (b @ db)[None, :, None]
     context['observation_error_after'] = observed_values(model, context) - obs[:, 4]
     return context
 
@@ -213,6 +235,15 @@ def initial_diagnostics(contexts):
     result['operator_inferred'] = float(np.mean([c.get('operator_inferred', False) for c in contexts]))
     if any(c.get('operator_inferred') for c in contexts):
         result['coefficient_prediction'] = float(torch.stack([c['log_coefficient'].exp() for c in contexts]).mean().detach())
+    if 'refinement_steps' in contexts[0]:
+        result['refinement_steps'] = float(np.mean([c['refinement_steps'] for c in contexts]))
+    if 'latent_covariance' in contexts[0]:
+        covariances = [c['latent_covariance'].detach().cpu().double() for c in contexts]
+        values = torch.stack([torch.linalg.eigvalsh(c) for c in covariances])
+        result.update(latent_mean_variance=float(values.mean()),
+                      latent_strong_directions=float((values < .5).sum(-1).double().mean()),
+                      latent_weak_directions=float((values >= .5).sum(-1).double().mean()),
+                      latent_effective_directions=float((1 - values).sum(-1).mean()))
     if 'assimilation_observations' in contexts[0]:
         result['assimilation_applied'] = float(np.mean([c.get('assimilation_applied', False) for c in contexts]))
         for when in ('before', 'after'):

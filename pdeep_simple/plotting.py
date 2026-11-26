@@ -160,8 +160,8 @@ def loss_plots(run, out):
     for records, label in ((train, 'train'), (val, 'validation')):
         axes[0].plot([int(r['update']) for r in records], [float(r['field']) for r in records], label=label)
         axes[2].plot([int(r['update']) for r in records], [float(r['total']) for r in records], label=label)
-    for key in ('aux', 'kinematic', 'weak', 'initial', 'boundary'):
-        values = np.array([float(r[key]) for r in train])
+    for key in ('aux', 'kinematic', 'weak', 'initial', 'boundary', 'initial_reconstruction', 'alignment'):
+        values = np.array([float(r.get(key) or 0.) for r in train])
         if np.any(values):
             axes[1].plot([int(r['update']) for r in train], values, label=key)
     stage_lines(axes, [run])
@@ -249,7 +249,7 @@ def reconstruction_plots(directory, out, maximum):
             case = {k: saved[k] for k in saved.files}
         meta = json.loads(str(case['metadata']))
         case_label = f'{meta["case"]} / ' if filtered else ''
-        times = case['times']; maximum_frames = 5 if filtered or meta['method'] in ('F-Geo', 'G-Geo', 'H-Geo', 'E-Flow') or meta.get('initial_aware_evolution') or meta.get('initial_latent') or meta.get('assimilation') or meta.get('infer_operator') else 4
+        times = case['times']; maximum_frames = 5 if filtered or meta['method'] == 'E-Flow' or meta['method'].startswith('F-') or meta.get('initial_aware_evolution') or meta.get('initial_latent') or meta.get('assimilation') or meta.get('infer_operator') else 4
         indices = np.unique(np.linspace(0, len(times) - 1, min(maximum_frames, len(times))).round().astype(int))
         for channel in range(2 if meta['pde'] in WAVES else 1):
             truth, prediction = case['reference'][:, :, channel], case['prediction'][:, :, channel]

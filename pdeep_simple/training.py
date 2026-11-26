@@ -30,16 +30,21 @@ def load_checkpoint(path, device='cpu'):
 
 
 def model_from_config(config, device='cpu', report=True):
-    if config.get('flow') and config['model'] not in ('A', 'C', 'E'):
-        raise ValueError('--flow supports A/C and compact-initial E only')
+    if config.get('flow') and config['model'] not in ('A', 'C', 'E', 'F'):
+        raise ValueError('--flow supports A/C and compact-initial E/F only')
     if config.get('flow') and config['model'] == 'E' and not config.get('initial_latent'):
         raise ValueError('E-Geo flow requires --initial-latent (e.g. 32)')
+    assimilation = config.get('assimilation')
+    if assimilation is None:
+        assimilation = config['model'] == 'F' and not config.get('flow')
     model = build_model(config['model'], config['size'], **{k: config.get(k) for k in
                         ('width', 'layers', 'heads', 'memory')}, report=report,
                         fourier_bands=config.get('fourier_bands', 6), wave_modes=config.get('wave_modes', 32),
-                        evolution_steps=config.get('evolution_steps', 32), siren_omega=config.get('siren_omega', 30.),
-                        green_sources=config.get('green_sources', 64), initial_latent=config.get('initial_latent'),
-                        assimilation=config.get('assimilation', False), infer_operator=config.get('infer_operator', False))
+                        initial_latent=config.get('initial_latent'),
+                        assimilation=assimilation,
+                        infer_operator=config.get('infer_operator', False),
+                        f_variant=config.get('f_variant', 'base'), f_steps=config.get('f_steps', 3),
+                        joint_conditioning=config.get('joint_conditioning', False))
     if config.get('flow'):
         from .flow import LatentFlow
         model = LatentFlow(model, config.get('latent_dim', 32), config.get('latent_points', 256))
@@ -76,13 +81,12 @@ def draw_training_case(case, mode, count, config, scales, rng, device, training=
     obs = observations(case, count, config['noise'], rng)
     inputs = model_input(case, mode, obs, scales, rng, device)
     coords, target = query_draw(case, config['queries'], rng)
-    initial_aware = config['model'] == 'E' and case['meta']['pde'] in PARABOLIC + WAVES
+    initial_aware = config['model'] in ('E', 'F') and case['meta']['pde'] in PARABOLIC + WAVES
     if training and initial_aware:
         initial_count = max(1, len(coords) // 4)
         coords[:initial_count, 2] = case['times'][0]
         target[:initial_count] = interpolate(case, coords[:initial_count])
-    exact_velocity = (config['model'] == 'E' and case['meta']['pde'] in WAVES or
-                      config['model'] == 'H' and case['meta']['pde'] == 'wave')
+    exact_velocity = config['model'] in ('E', 'F') and case['meta']['pde'] in WAVES
     queries = query_input(case, coords, device, bool(config['weights']['kinematic']) and not exact_velocity)
     return inputs, queries, torch.tensor(target, dtype=torch.float32, device=device)
 
@@ -101,6 +105,8 @@ def train(args):
     config['modes'] = args.modes.split(',')
     config['observations'] = [int(s) for s in args.observations.split(',')]
     config['weights'] = parse_losses(args.loss)
+    if config.get('joint_conditioning') and config['model'] != 'A':
+        raise ValueError('--joint-conditioning is only available for A-Geo')
     if any(m not in MODES for m in config['modes']):
         raise ValueError(f'modes must be selected from {MODES}')
     if min(config['observations']) < 0 or args.noise < 0 or min(args.batch, args.queries, args.updates) < 1:
@@ -108,17 +114,26 @@ def train(args):
     if any(m != 'forward' for m in config['modes']) and max(config['observations']) == 0:
         raise ValueError('inverse/hybrid training requires a nonzero observation option')
     checkpoint = load_checkpoint(args.resume) if args.resume else None
-    if (run / 'last.pt').exists() and not checkpoint:
+    if ((run / 'last.pt').exists() or (run / 'best.pt').exists()) and not checkpoint:
         raise ValueError('run already contains a checkpoint; use --resume or a new --run')
     if checkpoint:
         # Restore scientific settings, but allow data/checkpoints to move machines.
         saved = checkpoint['config']
+        if config.get('joint_conditioning') and not saved.get('joint_conditioning', False):
+            raise ValueError('--joint-conditioning needs training from scratch, not an original-model checkpoint')
         if args.staged and not saved.get('staged'):
             raise ValueError('--staged cannot be added to a non-staged checkpoint')
         if args.stage_start is not None and args.stage_start != saved.get('stage_start'):
             raise ValueError('--resume restores the saved --stage-start; omit it or use the saved value')
         config = dict(saved, data=str(Path(args.data).resolve()), updates=args.updates,
                       device=args.device, run=str(run), resume=args.resume)
+    if config['model'] == 'F':
+        config['initial_latent'] = 32 if config.get('initial_latent') is None else config['initial_latent']
+        if config.get('assimilation') is None:
+            config['assimilation'] = not config.get('flow')
+        config['f_architecture'] = 'e_initial_v1'
+        if not np.isfinite(config.get('align_weight', .1)) or config.get('align_weight', .1) < 0:
+            raise ValueError('align-weight must be finite and nonnegative')
     if config.get('staged'):
         if config.get('flow'):
             raise ValueError('--staged is for deterministic training; it cannot be combined with --flow')
@@ -144,9 +159,10 @@ def train(args):
     paths = case_paths(config['data'], 'train', config.get('geometries', '').split(',') if config.get('geometries') else None)
     cases = [load_case(p) for p in paths]
     val_cases = [load_case(p) for p in case_paths(config['data'], 'val', config.get('geometries', '').split(',') if config.get('geometries') else None)]
-    initial_flow = bool(config.get('flow') and config['model'] == 'E')
-    if initial_flow and any(not any(c['meta']['pde'] == 'wave' for c in split) for split in (cases, val_cases)):
-        raise ValueError('E initial-state flow needs wave cases in both training and validation')
+    initial_flow = bool(config.get('flow') and config['model'] in ('E', 'F'))
+    initial_pdes = PARABOLIC + WAVES if config['model'] == 'F' else ('wave',)
+    if initial_flow and any(not any(c['meta']['pde'] in initial_pdes for c in split) for split in (cases, val_cases)):
+        raise ValueError('initial-state flow needs supported dynamic cases in both training and validation')
     scales = checkpoint['scales'] if checkpoint else normalization(cases)
     config['scales'] = scales
     logged_pdes = config.get('logged_pdes', list(PDES) if any(c['meta']['pde'] not in PDES[:4] for c in cases) else list(PDES[:4]))
@@ -196,9 +212,9 @@ def train(args):
             print('Stage 2: frozen field representation; conditional flow matching only', flush=True)
         model.train(); optimizer.zero_grad(set_to_none=True)
         totals = dict.fromkeys(LOSS_NAMES + ('total',), 0.)
-        by_pde = {}; fm_total = 0.; reconstruction = 0.
+        by_pde = {}; fm_total = 0.; reconstruction = 0.; alignment = 0.
         wave_fields = {pde: [0., 0., 0] for pde in WAVES}
-        pool = [i for i, c in enumerate(cases) if c['meta']['pde'] == 'wave'] if initial_flow and stage == 'flow' else len(cases)
+        pool = [i for i, c in enumerate(cases) if c['meta']['pde'] in initial_pdes] if initial_flow and stage == 'flow' else len(cases)
         indices = rng.choice(pool, config['batch'], replace=config['batch'] > (len(pool) if isinstance(pool, list) else pool))
         for index in indices:
             case = cases[index]
@@ -219,11 +235,17 @@ def train(args):
                 context = None
                 if stage == 'ae':
                     context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
+                elif config['model'] == 'F':
+                    context = model.encode(inputs)
                 loss, parts = case_loss(model, case, inputs, queries, targets, scales, active_config['weights'], context, diagnostics)
-                if config.get('initial_latent') and case['meta']['pde'] == 'wave':
+                if config.get('initial_latent') and case['meta']['pde'] in initial_pdes:
                     representation = initial_model.representation_loss(case, scales)
                     loss = loss + representation
                     reconstruction += float(representation.detach()) / config['batch']
+                    if config['model'] == 'F' and config['f_variant'] != 'base':
+                        aligned = initial_model.alignment_loss(context, case, scales)
+                        loss = loss + config['align_weight'] * aligned
+                        alignment += float(aligned.detach()) / config['batch']
                 if diagnostics:
                     values = wave_fields[case['meta']['pde']]; points = len(targets)
                     values[0] += diagnostics['u'] * points; values[1] += diagnostics['v'] * points; values[2] += points
@@ -241,6 +263,8 @@ def train(args):
         row = dict(update=update, **totals)
         if config.get('initial_latent'):
             row['initial_reconstruction'] = reconstruction if stage != 'flow' else ''
+        if config['model'] == 'F' and config['f_variant'] != 'base':
+            row['alignment'] = alignment if stage != 'flow' else ''
         row.update({f'field_{pde}': float(np.mean(by_pde[pde])) if pde in by_pde else ''
                     for pde in logged_pdes})
         if config.get('flow'):
@@ -261,8 +285,8 @@ def train(args):
             validation = dict.fromkeys(LOSS_NAMES + ('total',), 0.)
             validation_fields = {pde: [0., 0] for pde in PDES}
             validation_waves = {pde: [0., 0., 0] for pde in WAVES}
-            val_rng = np.random.default_rng(config['seed'] + 9001); val_fm = 0.; val_reconstruction = 0.
-            fm_cases = sum(c['meta']['pde'] == 'wave' for c in val_cases) if initial_flow else len(val_cases)
+            val_rng = np.random.default_rng(config['seed'] + 9001); val_fm = 0.; val_reconstruction = 0.; val_alignment = 0.
+            fm_cases = sum(c['meta']['pde'] in initial_pdes for c in val_cases) if initial_flow else len(val_cases)
             # Recreate fixed draws each validation, over every validation physical case.
             with torch.set_grad_enabled(stage != 'flow' and bool(active_config['weights']['kinematic'])):
                 for index, case in enumerate(val_cases):
@@ -272,7 +296,7 @@ def train(args):
                     diagnostics = {}
                     if stage == 'flow':
                         context = model.encode(inputs)
-                        if not initial_flow or case['meta']['pde'] == 'wave':
+                        if not initial_flow or case['meta']['pde'] in initial_pdes:
                             loss = model.matching_loss(context, val_latents[index], val_rng)
                             val_fm += float(loss) / fm_cases
                         else:
@@ -289,13 +313,22 @@ def train(args):
                         parts = dict.fromkeys(LOSS_NAMES, loss * 0); parts['field'] = field_loss
                     else:
                         context = None
-                        if stage == 'ae':
+                        if config['model'] == 'F':
+                            # Conditional validation never supplies the reference latent.
+                            context = model.encode(inputs)
+                            if stage == 'ae' and 'f_prior' in context:
+                                context = model.with_latent(context, context['f_prior'])
+                        elif stage == 'ae':
                             context = model.with_latent(model.encode(inputs), model.reference_latent(case, scales))
                         loss, parts = case_loss(model, case, inputs, queries, targets, scales, active_config['weights'], context, diagnostics)
-                        if config.get('initial_latent') and case['meta']['pde'] == 'wave':
+                        if config.get('initial_latent') and case['meta']['pde'] in initial_pdes:
                             representation = initial_model.representation_loss(case, scales)
                             loss = loss + representation
                             val_reconstruction += float(representation.detach()) / len(val_cases)
+                            if config['model'] == 'F' and config['f_variant'] != 'base':
+                                aligned = initial_model.alignment_loss(context, case, scales)
+                                loss = loss + config['align_weight'] * aligned
+                                val_alignment += float(aligned.detach()) / len(val_cases)
                     for name in parts:
                         validation[name] += float(parts[name].detach()) / len(val_cases)
                     validation['total'] += float(loss.detach()) / len(val_cases)
@@ -307,6 +340,8 @@ def train(args):
             validation_row = dict(update=update, **validation)
             if config.get('initial_latent'):
                 validation_row['initial_reconstruction'] = val_reconstruction if stage != 'flow' else ''
+            if config['model'] == 'F' and config['f_variant'] != 'base':
+                validation_row['alignment'] = val_alignment if stage != 'flow' else ''
             if config.get('flow'):
                 validation_row.update(stage=stage, fm=val_fm if stage == 'flow' else '')
                 if stage == 'flow':

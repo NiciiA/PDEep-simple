@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 from .data import case_paths, load_case, normalization
 from .training import load_checkpoint, model_from_config, select_device
-from .evaluation import evaluate_case, write_rows
+from .evaluation import evaluate_case, write_rows, model_label
 from .plotting import field_panel, read_csv, comparison_plots, field_loss_plots, stage_lines
 from .baselines import METHODS
 
@@ -31,7 +31,7 @@ def uncertainty_plot(field, out, name):
     gp = field['meta']['method'] == 'gp'
     if not bayes and not gp and not field['meta'].get('samples'):
         return
-    count = min(4 if field['meta']['method'] == 'E-Flow' else 2, len(field['sample_fields']))
+    count = min(4 if field['meta']['method'] == 'E-Flow' or field['meta']['method'].startswith('F-') else 2, len(field['sample_fields']))
     for channel in range(2 if field['meta']['pde'] in WAVES else 1):
         truth, mean = field['reference'][:, :, channel], field['prediction'][:, :, channel]
         std = field['sample_std'][:, :, channel]
@@ -162,7 +162,7 @@ def compare_runs(args):
             if config.get('flow') and checkpoint.get('stage') != 'flow':
                 raise ValueError(f'{run} has not finished its autoencoder stage')
             model = model_from_config(config, options['device']); model.load_state_dict(checkpoint['model']); model.eval()
-            scales = checkpoint['scales']; methods = [config['model'] + ('-Flow' if config.get('flow') else '-Geo')]
+            scales = checkpoint['scales']; methods = [model_label(config)]
         else:
             settings = json.loads((run / 'evaluation.json').read_text())
             config, model = {}, None

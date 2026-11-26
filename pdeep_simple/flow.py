@@ -48,6 +48,8 @@ class LatentFlow(nn.Module):
         if latent_dim < 1 or latent_points < 8:
             raise ValueError('latent-dim must be positive and latent-points at least eight')
         self.base = base
+        if hasattr(base, 'f_variant'):
+            base.flow_conditioned = True
         width = base.coordinates.linear.out_features
         self.initial_only = hasattr(base, 'initial_codec')
         if self.initial_only:
@@ -111,7 +113,8 @@ class LatentFlow(nn.Module):
     def calibrate(self, cases, scales):
         with torch.no_grad():
             z = torch.stack([self.reference_latent(case, scales) for case in cases])
-            values = z[[i for i, case in enumerate(cases) if case['meta']['pde'] == 'wave']] if self.initial_only else z
+            initial_pdes = getattr(self.base, 'initial_pdes', ('wave',))
+            values = z[[i for i, case in enumerate(cases) if case['meta']['pde'] in initial_pdes]] if self.initial_only else z
             self.latent_mean.copy_(values.mean(0))
             self.latent_scale.copy_(values.std(0, unbiased=False).clamp_min(.05))
         return z

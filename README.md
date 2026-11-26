@@ -1,6 +1,6 @@
 # PDEep/simple
 
-Numerical PDE datasets, deterministic A/C/D/E/F/G/H-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
+Numerical PDE datasets, deterministic A/C/D/E/F-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
 
 ## Installation and quick start
 
@@ -117,6 +117,80 @@ python -m pdeep_simple train --data data/g1_small --model A --size s \
   --batch 2 --queries 512 --device auto --run runs/a
 ```
 
+### A-Geo with joint conditioning
+
+Original A keeps individual mesh, PDE and sensor tokens alongside learned summary
+tokens; coordinate queries cross-attend to that memory. `--model A
+--joint-conditioning` enables three changes together:
+
+- One existing cross-attention block lets mesh nodes read PDE and observation
+  tokens once per case. Updated mesh nodes stay distributed in memory and are
+  available through barycentric interpolation. Original local mesh features also
+  remain available to each query.
+- A small per-head MLP adds sensor-specific bias **before softmax** in the existing
+  query-to-memory attention. Its inputs are signed dx/dy/dt, spatial distance,
+  observed-quantity embedding, and log normalized noise. Differences use domain
+  spans and the physical time interval; stationary dt is zero. Attention remains
+  global and allows earlier/later and cross-quantity observations. This replaces
+  A's fixed Gaussian sensor-summary path; individual sensor tokens remain.
+- Directed expression graphs replace the old undirected family templates. Edges
+  run operand -> operator with input roles, including ordered subtraction and
+  powers. Masked scalar values and field references enter **before** two graph
+  message-passing rounds. Spatial fields stay on the mesh; permitted exact element
+  coefficient samples remain spatial tokens bound to the coefficient node. Basis
+  channel embeddings are separate from mathematical operator embeddings.
+
+The graphs follow `physics.solve`: write A(u) = -div(a grad u). Poisson/diffusion
+use A(u)=f; ADR adds b dot grad u + rho*u; semilinear adds beta*u^3. Heat and
+reaction-diffusion use u_t+A(u)+rho*u=f*cos(2*pi*nu*t), with rho=0 for heat.
+Waves use u_tt-div(c^2 grad u)=f*cos(2*pi*nu*t); damped waves add gamma*u_t.
+The legacy unconfigured T4 wave coefficient convention is retained explicitly.
+p-Laplacian uses -div((epsilon^2+|grad u|^2)^((p-2)/2) grad u)=f with the actual
+solver regularization; Eikonal uses |grad u|=1/c. Initial conditions and homogeneous
+Dirichlet constraints are represented separately. Hidden values never populate
+graph nodes; partial field masks remain on the mesh. The new graph does not use a
+PDE-family ID token. It describes the implemented equations, not arbitrary PDEs
+or demonstrated generalization to unseen compositions.
+
+Train from scratch in a separate directory (run from the package root):
+
+```bash
+python -u -m pdeep_simple train \
+  --data data/colab_g2 --model A --joint-conditioning --size m \
+  --modes forward,inverse,hybrid --loss "field=1" \
+  --updates 2500 --batch 16 --queries 4096 \
+  --observations 0,8,16,32,64,128 --noise 0.01 --seed 42 \
+  --validate-every 500 --device cuda --run runs/colab_a_joint
+
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_a_joint \
+  --pde wave --modes forward,inverse,hybrid \
+  --observations 0,8,32,128 --noise .01 --seed 123 \
+  --frames 21 --max-cases 3 --device cuda --out runs/eval_a_joint
+
+python -m pdeep_simple plot --run runs/eval_a_joint --what fields
+```
+
+Repeat evaluation with the original A run and the same filters, seed, counts,
+noise and frames, changing only `--run` and `--out`. Existing metrics retain
+PDE/mode/sensor-count groups, physical-time errors and separate wave u/v errors;
+existing reference/prediction/absolute-error plots are reused. Random test cases
+do not establish held-out operator-composition or geometry-family generalization.
+Repeat with `--pde heat` and `--pde diffusion` in separate output directories for
+the early-time heat and spatial-coefficient comparisons.
+
+Without the flag, A and its checkpoints retain their original behavior. C/D/E/F
+are unchanged and reject the flag. Eval/plot restore the variant from the saved
+configuration; original and joint A checkpoints cannot be interchanged. Resume
+restores the saved architecture. No training stage, sampling rule, loss or output
+channel convention changes: A still predicts wave u/v independently.
+
+Additional cost is one mesh-to-conditioning attention block per case,
+O(N_mesh*(N_PDE+N_obs)*width), plus small directed-graph and relative-bias MLPs.
+The sensor bias is computed once per query chunk and reused by all decoder
+layers, without another dense query-to-mesh bias matrix. Standard query attention
+still reads A's full memory. Accuracy improvements need training and comparison;
+none are assumed here.
+
 ### C-Geo
 
 ```bash
@@ -220,56 +294,57 @@ python -m pdeep_simple plot --run runs/colab_e_evolution --what losses,fields
 
 Evaluation keeps the existing metrics and grid/refinement options. For E's time-dependent PDEs, default evaluation/field plots show physical times 0, .25, .5, .75 and 1, interpolating stored FEM references as needed. E records `modal_evolution`, `initial_aware_evolution`, `evolution_rule`, and the actual `wave_modes` count for every PDE. The existing `modal_wave` diagnostic and `*_e_wave.png` undamped-wave panel remain available. Use the normal `plot --runs` comparisons across separate runs.
 
-### F-Geo: learned PDE evolution
+### F-Geo: hidden-state inference with E's physical decoder
+
+F replaces the former learned-evolution F, SIREN G and kernel H models. It subclasses E, reusing its conditioning backbone, initial-state codec, cached FEM modes, heat/wave/damped-wave/reaction-diffusion evolution, residual decoder and wave velocity derivative. Stationary PDEs keep E's coordinate decoder. No new PDE solver or flow network is introduced. Existing results remain on disk; old F checkpoints are rejected by an architecture-version marker, and G/H are no longer model choices.
+
+| Variant | Adds |
+|---|---|
+| `--f-variant base` | Compact initial latent (default 32) and E's noise-aware modal correction. |
+| `--f-variant align` | Base plus `align_weight * mean((z_obs - stopgrad(z_full))^2)`, default weight .1. |
+| `--f-variant iterative` | Alignment plus up to three regularized space-time latent/parameter corrections, replacing the one-shot modal update. |
+| `--f-variant observable` | Iterative inference with a small local sensitivity matrix, regularized covariance and preconditioned updates. |
+| Any variant + `--flow` | Existing AE/FM pipeline and Heun sampler over the initial-state latent. |
+
+On undamped waves, F-Base reproduces E with the same weights and `--initial-latent 32 --assimilation` (and the same operator-inference setting). E currently applies these two options only to undamped waves. F extends that codec and the same modal Gaussian update to scalar heat/reaction-diffusion states and damped-wave u/v, retaining E's physical decoder throughout. Scalar initial encodings use u only, with an unused zero v channel. Known initial nodes bypass the codec and remain fixed through every correction. Other known physics remains supplied by E's existing masks. Add `--infer-operator` to permit the existing positive T2 scalar speed/diffusivity estimate; hidden spatial operators still use E's initial-aware learned fallback.
+
+The complete initial field is used only for training targets and representation losses. Alignment trains the observation estimate toward the stopped-gradient full-state encoding; it never passes the full field into the conditioning encoder. Validation and inference reconstruct from known inputs and observations, including during F's AE stage. `initial_reconstruction` and `alignment` are logged separately from the field loss. Alignment is used by align/iterative/observable during deterministic or AE training; the existing FM stage freezes that representation and trains only the flow velocity network.
+
+Iterative inference minimizes `sum((prediction-observation)^2 / variance) + ||state-prior||^2`, using actual coordinates, physical times, u/v quantities and noise. The state is the initial latent plus the log scalar operator parameter when it is both hidden and supported. The complete E prediction, including the residual and fixed contributions, is used. Gradients of each update are stopped to avoid second-order unrolling, while the final field loss still reaches the observation encoder through the updated state. Small steps and a short decrease check regularize the refinement. `--f-steps 2`, `3` or `4` controls the maximum count; zero sensors skips correction.
+
+Observable uses `J = d(predicted sensors)/d(state)` and `P = solve(I + J.T @ R^-1 @ J, I)`, with a unit diagonal prior and the existing 1e-6 normalized noise-variance floor. This smoothly restrains weak directions rather than discarding them. The local covariance also preconditions correction. Evaluation reports `latent_mean_variance`, `latent_strong_directions`, `latent_weak_directions` and `latent_effective_directions`; a strong direction has marginal latent covariance eigenvalue below .5. Zero sensors retains the prior covariance. Known-field masks can make latent directions unobservable even when the physical field itself is supplied exactly.
 
 ```bash
-python -u -m pdeep_simple train --data data/colab_g2 --model F --size m \
-  --evolution-steps 32 --modes forward,inverse,hybrid --loss field=1 \
-  --updates 2500 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
-  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_f_evolution
+# Reference; replace base with align, iterative or observable, using a separate run.
+python -u -m pdeep_simple train --data data/colab_g2 --model F --f-variant base \
+  --size m --wave-modes 64 --initial-latent 32 --modes forward,inverse,hybrid \
+  --loss field=1 --updates 2500 --batch 16 --queries 4096 \
+  --observations 0,8,16,32,64,128 --noise .01 --seed 42 \
+  --validate-every 500 --device cuda --run runs/colab_f_base
+
+python -u -m pdeep_simple train --data data/colab_g2 --model F --f-variant iterative \
+  --size m --wave-modes 64 --initial-latent 32 --align-weight .1 --f-steps 3 \
+  --modes forward,inverse,hybrid --loss field=1 --updates 2500 --batch 16 \
+  --queries 4096 --observations 0,8,16,32,64,128 --noise .01 --seed 42 \
+  --validate-every 500 --device cuda --run runs/colab_f_iterative
+
+# Flow can be added to any variant; total updates include both stages.
+python -u -m pdeep_simple train --data data/colab_g2 --model F --f-variant observable \
+  --size m --wave-modes 64 --initial-latent 32 --flow --ae-updates 1000 \
+  --flow-steps 16 --loss field=1 --updates 2500 --batch 16 --queries 4096 \
+  --validate-every 500 --device cuda --run runs/colab_f_observable_flow
+
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_f_iterative \
+  --pdes heat,wave,damped_wave,reaction_diffusion --limit 3 \
+  --modes forward,inverse,hybrid --observations 0,8,16,32,64,128 --device cuda
+python -m pdeep_simple plot --run runs/colab_f_iterative --what losses,fields
 ```
 
-F uses learned evolution for `heat`, `reaction_diffusion`, `wave` and `damped_wave`, following the dataset's actual time-dependent equations. `diffusion` is stationary here, as are Poisson, elliptic ADR, semilinear elliptic, p-Laplacian and Eikonal; these retain A's coordinate decoder. One shared A conditioning encoder and two-layer mesh graph handle all PDEs and Forward/Inverse/Hybrid modes. The existing masked initial-state head selects known values or infers a coherent nodal field: u for first-order problems, u/v for second-order problems. Damping, reaction and other available physical parameters enter through the existing conditioning tokens and masks. Hidden values are not substituted from reference data.
+Deterministic F defaults to correction on; `--no-assimilation` is an explicit ablation. Flow defaults to correction off because its condition already contains the sensors. Adding `--assimilation` applies at most one small regularized consistency refinement per conditional sample, rather than counting those observations as independent new evidence. Observable flow without correction still reports local sensitivity diagnostics. One sampled initial state defines a complete trajectory across all times/query chunks; known fields bypass every sample. Training/validation splits for F flow need at least one supported dynamic case. Scalar PDEs and both wave channels share the existing AE/FM code; stationary predictions remain deterministic. Flow still cannot be combined with staged physics training.
 
-Wave and damped wave share the existing acceleration head and symplectic-Euler-like v-then-u update. Heat and reaction-diffusion share one small additional head, learning nonnegative edge exchange rates, nonnegative local decay and a signed drive. Their learned rate is `u_t = sum_j beta_ij*(u_j-u_i) - decay_i*u_i + drive_i`, with positive beta scaled by mesh edge lengths. The step uses `(u_i + dt*(sum_j beta_ij*u_j + drive_i)) / (1 + dt*(sum_j beta_ij + decay_i))`: self/decay is implicit and neighbor values are explicit. With drive zero, this is a bounded relaxation for any nonnegative rates and step size, avoiding an explicit diffusion CFL restriction. It is not a full implicit FEM solve, and nonlinear learned drive can still destabilize a rollout. Fine meshes or fast dynamics can require more than 32 steps for accuracy. The wave update is not unconditionally stable or energy conserving either.
+Saved evaluations distinguish F variants by method name and retain field/initial/boundary errors, separate wave u/v errors, observation errors before/after, accepted `refinement_steps`, and five physical times 0, .25, .5, .75 and 1. Flow uses the existing individual-sample, mean, standard-deviation, reference and error plots. Compare against a separate E run with `--initial-latent 32 --assimilation`, using identical cases, sensor draws, seeds and training normalization.
 
-Each trajectory is computed once per case/conditioning draw and reused by field and physics losses and query chunks, with P1 spatial and linear temporal interpolation. Later reconstruction errors backpropagate through all steps. Known zero Dirichlet nodes remain zero. Heat/reaction-diffusion supervise only u and leave the unused second output zero; wave/damped wave supervise u/v using the existing channel normalization. Interpolation does not enforce continuous wave `u_t=v`, so the usual kinematic metric/loss remains available. The new first-order head changes F's parameter structure: older F checkpoints are rejected with an explanatory error; use a fresh run such as `runs/colab_f_evolution`. New checkpoints retain normal resume and staged-training support.
-
-### G-Geo: Fourier features and SIREN
-
-```bash
-python -u -m pdeep_simple train --data data/colab_g2 --model G --size m \
-  --fourier-bands 6 --siren-omega 30 --modes forward,inverse,hybrid --loss field=1 \
-  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
-  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_g
-```
-
-G keeps D's normalized Fourier coordinates and conditioned attention decoder, replacing its final field MLP with two sinusoidal hidden layers and a linear output. The frequency-scaled uniform initialization follows the [SIREN authors' implementation](https://github.com/vsitzmann/siren/blob/master/modules.py). This readout acts on coordinate, geometry, physical and observation features together. It is used for every PDE. High-frequency features can also amplify derivative losses; improved reconstruction is an experimental hypothesis.
-
-### H-Geo: learned propagation kernels
-
-```bash
-python -u -m pdeep_simple train --data data/colab_g2 --model H --size m \
-  --green-sources 64 --modes forward,inverse,hybrid --loss field=1 \
-  --updates 5000 --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
-  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_h
-```
-
-H uses the same masked initial-field approach and predicts `u=u0+t*v0+t^2*R`, with physical velocity obtained by autograd. R is a weighted application of small geometry/operator-conditioned kernels to the initial displacement, velocity and known or inferred forcing amplitudes. Known-operator kernels receive neither initial/forcing amplitudes nor observations; a second pass through the **shared** conditioning encoder supplies their operator/geometry features. With hidden operators, the full available conditioning informs those features, including observations and any supplied initial state. No hidden true operator or source enters the prediction.
-
-Spatial integration uses 64 fixed importance samples of lumped FEM node quadrature (all nodes if fewer), with area weights. Cosine forcing uses two causal midpoint samples with `s<=t` and a `(t-s)` factor. Pairwise temporary tensors are limited to 128 output queries by the selected sources. Kernel width is capped at 32; F's graph width at 64. F/H skip penalties for their exactly preserved known initial values and zero boundaries; H also skips the redundant kinematic penalty. Evaluation diagnostics remain available. This is an approximate learned propagation representation, not an exact Green's-function solver or PDE guarantee; finite spatial/time quadrature can miss fine structure and fast forcing.
-
-F uses evolution for all four time-dependent families above; H uses its propagation kernels for undamped `wave`, including hidden operators, and retains A's decoder for other PDEs. G uses its sinusoidal readout throughout. Each architecture trains one shared model across Forward/Inverse/Hybrid and mixed PDEs, using existing presets, losses, optimizer, staged training and resume. F/G/H keep ordinary random physical-time training queries; E's initial-time sampling is unchanged. Flow remains limited to A/C. Use separate run directories; these examples do not establish trained accuracy.
-
-```bash
-python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_f_evolution --frames 5 --device cuda
-python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_g --frames 5 --device cuda
-python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_h --frames 5 --device cuda
-python -m pdeep_simple plot --runs runs/colab_f_evolution runs/colab_g runs/colab_h --what losses,comparisons
-python -m pdeep_simple plot --run runs/colab_f_evolution --what fields
-```
-
-With the usual stored time grid, `--frames 5` evaluates 0, .25, .5, .75 and 1; F/G/H field plots retain all five. Existing comparison plots separate u/v, include error versus physical time and can include A/C/D/E and baseline results. Use matching held-out cases, observation draws and training normalization, as for existing comparisons. CUDA/MPS selection remains through `--device`; eigenmodes and numerical FEM solvers are not used by F/G/H prediction.
+These are research approximations: a small latent can miss detail, three first-order steps need not find the best reconstruction, and lower sensor error need not lower field error. The one-shot modal correction can leave the compact decoder's latent manifold; iterative variants remain in it. Observable covariance is local and depends on the chosen latent units/unit prior, not calibrated uncertainty or a global Bayesian posterior. With flow it is a sensitivity diagnostic/preconditioner, not independent evidence added to the learned conditional distribution. The Jacobian and solves are small, but observable inference costs more than base/iterative. The scalar reaction/damping and modal truncation/interpolation limits described for E still apply. CUDA/MPS use the existing decoder support and small CPU solve fallbacks where needed.
 
 ### A-Geo + Flow
 
@@ -311,11 +386,11 @@ Both CSVs record `stage=field` or `stage=physics`; physics terms are zero during
 | `--modes` | Conditioning modes sampled during training |
 | `--loss` | Weighted terms, e.g. `field=1,aux=.1`; choose only applicable terms |
 | `--device` | `auto,cpu,cuda,mps`; Colab notebook training explicitly uses `cuda` |
-| `--flow` | Field representation stage followed by conditional latent flow matching (A/C, or E with `--initial-latent`) |
-| `--ae-updates`, `--latent-dim` | First-stage updates and A/C latent dimension; E uses `--initial-latent`; require 1 <= AE updates < total updates |
+| `--flow` | Field representation stage followed by conditional latent flow matching (A/C, E with `--initial-latent`, or F) |
+| `--ae-updates`, `--latent-dim` | First-stage updates and A/C latent dimension; E/F use `--initial-latent`; require 1 <= AE updates < total updates |
 | `--resume` | Restore `last.pt`, including model, optimizer, RNG and saved stage settings |
 
-`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the attention models A/D/E/F/G/H. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
+`--width`, `--layers`, `--heads` and `--memory` override presets; memory size affects the attention models A/D/E/F. `--observations`, `--noise`, `--seed`, `--lr` and `--validate-every` retain their normal CLI meanings. Inverse/Hybrid training uses nonzero observation counts. For T2 coefficient-head supervision add `aux=.1`; `kinematic` applies to wave/damped wave, `initial` to known initial nodes, and `boundary` to zero boundary values. `weak` uses P1 test functions and known forcing/operator information (or the T2 scalar prediction); it is not a strong-form derivative guarantee. Eikonal has no elliptic weak loss. The networks do not hard-enforce the PDE or boundary conditions.
 
 Flow's **total** `--updates` includes both stages: the A/C examples use 100 representation updates and 300 flow updates. First train a reference-field encoder and latent-conditioned A/C decoder (or the compact initial-state representation and E decoder); then freeze that representation and train a conditional velocity MLP using training-only latent normalization. Physical PDE time and latent ODE flow time are different variables. Inference uses known inputs and observations, never the reference encoder. One latent describes the entire space-time field, including wave u/v, and is reused across query chunks.
 
@@ -377,6 +452,26 @@ python -m pdeep_simple plot --run runs/colab_e --what fields
 `--pdes` also accepts comma-separated names such as `wave,heat,diffusion`. `--limit` is an alias for `--max-cases`: it takes the first matching physical cases in manifest order, before loading fields or running inference. Selection is deterministic and independent of the model; modes and observation draws retain their existing meanings. A limit of three with all three modes evaluates three physical cases under each mode.
 
 Filtered neural evaluations use a fresh `evaluations/selection_*` folder inside the run (`--out`, if supplied, is the parent instead), preserving previous full results in `evaluation/`. Existing `evaluation.json` records the selected case paths, and filtered runs save all selected predictions by default; `--save-cases` can explicitly reduce this. Plotting the run uses its most recent default full or selected evaluation, without inference. Filtered field plots include each saved case/mode at its largest saved observation count, use all groups unless `--max-fields` limits them, and save inside that selection's `plots/` folder. Custom output folders can be plotted directly with `plot --run PATH --what fields`. Selected wave runs use five uniform physical times by default (0, .25, .5, .75, 1), with existing FEM time interpolation for references; u/v are plotted separately on the same domain and shared reference/prediction colour limits.
+
+Inspect the exact sparse sensors separately from dense known initial fields and coefficients:
+
+```bash
+python scripts/inspect_observations.py --data data/colab_g2 --run runs/colab_f_iterative \
+  --case test_wave_square_00000 --observations 128
+```
+
+This prints all three modes, quantity IDs, physical-time counts, noise, known-input mask counts and the first ten actual measurements, then saves `observation_times.png` and `space_time_observations.png` under the evaluation's `observation_inspection/CASE_nCOUNT/` folder (`--out` overrides it). It reads saved NPZ sensors/masks first, choosing the latest matching evaluation selection. Use `--evaluation PATH/TO/selection_*` for a specific selection or custom evaluation output. Missing files are reproduced with the saved evaluation seed/noise and the same case-specific sensor/mask RNGs as `eval`, without loading model weights or running inference. Without any saved evaluation settings, it explicitly uses the current eval CLI defaults (or `--seed`/`--noise`), never the training seed; unrecorded case/count/mode combinations are labeled as reproductions.
+
+Inspect the trained F-Iterative prediction before correction and after each accepted step:
+
+```bash
+python scripts/inspect_f_corrections.py --data data/colab_g2 --run runs/colab_f_iterative \
+  --case test_wave_square_00000 --observations 128 --device mps
+```
+
+The utility requires saved sensors and masks and never samples new measurements. It uses the selected evaluation's checkpoint/settings (`--evaluation` and `--checkpoint` can select them explicitly), the same FEM nodes and five physical times at every stage, and the normal decoder/evolution. CSVs under `RUN/correction_diagnostics/CASE_nCOUNT/` contain each mode's sensor/field/initial RMSE, all per-time field errors, and Hybrid known/hidden initial errors. The main field RMSE is the arithmetic mean of five spatial FEM-quadrature RMSEs; sensor RMSE is over the actual measurements. Each mode gets correction-versus-RMSE and initial reference/stage-0/final/error PNGs. A stopped/skipped correction repeats its final state and is labeled unchanged, rather than inventing additional updates. An optional `refine(..., return_stages=True)` returns intermediate contexts without changing the default result, parameters or checkpoints.
+
+The diagnostic reports physical-unit errors and explains the current normalization: both measured values and sigma are divided by their own u/v output scales. The correction's data term is equivalent to `sum(residual_physical^2 / (sigma_physical^2 + 1e-6*output_scale^2))`; the variance floor slightly changes relative channel weighting. There is no extra velocity-amplitude multiplier, though sensor counts, physical residuals and sensitivities affect the update. The existing unit prior-distance penalty, RMS-limited .25 gradient direction, backtracking and optional log-parameter clipping are unchanged. The script prints the actual scales and effective noise for the loaded run.
 
 Errors use lumped spatial weights and trapezoidal time weights. `mse`/`rmse` are physical-unit errors; `normalized_mse=MSE/s_u^2` and `normalized_rmse=RMSE/s_u` use fixed **training-set RMS** with a .01 floor, separately for u/v. Relative L2 divides by reference energy and can be large near zero fields. Aggregates average per-case errors. Baselines should use `--normalization-run` matching the neural run, especially for geometry-family holdouts (`train --geometries square,disk`). No held-out magnitude sets an input scale.
 

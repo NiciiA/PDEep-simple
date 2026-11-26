@@ -26,19 +26,22 @@ def parser():
     inspect.add_argument('--seed', type=int, default=42); inspect.add_argument('--observations', type=int, default=32)
     inspect.add_argument('--noise', type=float, default=.01, help='Absolute Gaussian observation standard deviation')
     inspect.add_argument('--out', default='runs/inspection')
-    train = commands.add_parser('train', help='Train A/C/D/E/F/G/H-Geo using independent physical cases')
-    train.add_argument('--data', required=True); train.add_argument('--model', choices=['A', 'C', 'D', 'E', 'F', 'G', 'H'], default='A')
+    train = commands.add_parser('train', help='Train A/C/D/E/F-Geo using independent physical cases')
+    train.add_argument('--data', required=True); train.add_argument('--model', choices=['A', 'C', 'D', 'E', 'F'], default='A')
+    train.add_argument('--joint-conditioning', action='store_true',
+                       help='A only: directed operator graph, mesh fusion and relative sensor attention; train in a new run')
     train.add_argument('--size', choices=['s', 'm', 'l', 'xl', 'xxl'], default='s')
     for name in ('width', 'layers', 'heads', 'memory'):
         train.add_argument('--' + name, type=int, help='Manual preset override')
-    train.add_argument('--fourier-bands', type=int, default=6, help='D/G-Geo decoder frequency bands')
-    train.add_argument('--wave-modes', type=int, default=32, help='E-Geo FEM modes for wave, damped wave, heat and reaction-diffusion')
-    train.add_argument('--initial-latent', type=int, help='E-Geo compact initial-state dimension, e.g. 16 or 32')
-    train.add_argument('--assimilation', action='store_true', help='E-Geo noise-aware observation correction')
-    train.add_argument('--infer-operator', action='store_true', help='E-Geo reduced dynamics for unknown T2 scalar speed/diffusivity')
-    train.add_argument('--evolution-steps', type=int, default=32, help='F-Geo trajectory steps over the physical interval')
-    train.add_argument('--siren-omega', type=float, default=30., help='G-Geo sinusoidal activation frequency')
-    train.add_argument('--green-sources', type=int, default=64, help='H-Geo spatial quadrature samples')
+    train.add_argument('--fourier-bands', type=int, default=6, help='D-Geo decoder frequency bands')
+    train.add_argument('--wave-modes', type=int, default=32, help='E/F FEM modes for wave, damped wave, heat and reaction-diffusion')
+    train.add_argument('--initial-latent', type=int, help='E/F compact initial-state dimension; F defaults to 32')
+    train.add_argument('--assimilation', action=argparse.BooleanOptionalAction, default=None,
+                       help='Noise-aware correction; default on for deterministic F, off for F flow')
+    train.add_argument('--infer-operator', action='store_true', help='E/F reduced dynamics for unknown T2 scalar speed/diffusivity')
+    train.add_argument('--f-variant', choices=['base', 'align', 'iterative', 'observable'], default='base')
+    train.add_argument('--f-steps', type=int, choices=[2, 3, 4], default=3, help='F iterative correction steps')
+    train.add_argument('--align-weight', type=float, default=.1, help='F align/iterative/observable latent alignment weight')
     train.add_argument('--modes', default='forward,inverse,hybrid')
     train.add_argument('--loss', default='field=1,aux=.1', help='field,aux,kinematic,weak,initial,boundary weights, e.g. field=1,weak=.001')
     train.add_argument('--staged', action='store_true', help='Deterministic field-only training, then the selected --loss weights')
@@ -81,9 +84,9 @@ def parser():
         if name == 'eval':
             sub.add_argument('--run', required=True); sub.add_argument('--checkpoint', default='best.pt', choices=['best.pt', 'last.pt'])
             sub.add_argument('--assimilation', action=argparse.BooleanOptionalAction, default=None,
-                             help='Override E checkpoint correction setting without changing its weights')
+                             help='Override E/F checkpoint correction setting without changing its weights')
             sub.add_argument('--infer-operator', action=argparse.BooleanOptionalAction, default=None,
-                             help='Override E checkpoint scalar-operator setting')
+                             help='Override E/F checkpoint scalar-operator setting')
         else:
             sub.add_argument('--workers', default='1', help='Positive process count or auto (at most four)')
             sub.add_argument('--memory-gb', type=float, default=2., help='Conservative total worker memory budget; auto also respects available RAM')

@@ -1,211 +1,174 @@
-"""Three small A/D variants: learned evolution, sinusoidal readout and kernels."""
-import math
-import numpy as np
+"""F-Geo: E's decoder with aligned and refined initial-state inference."""
 import torch
-from torch import nn
-from .models import AGeo, DGeo, GraphLayer, mlp
+from .models import AGeo, EGeo
 from .data import PDES
+from .geometry import node_weights
 from .physics import PARABOLIC, WAVES
+from .wave import assimilate, observation_inputs, observed_values
 
 
-def initial_state(context, inputs, head):
-    features = torch.cat([context['mesh'], context['global_h'].expand(len(context['mesh']), -1)], -1)
-    predicted = head(features) * inputs['output_scales']
-    chosen = torch.where(inputs['field_masks'][:, 1:3].bool(), inputs['field_values'][:, 1:3], predicted)
-    # Existing datasets prescribe homogeneous Dirichlet values on these nodes.
-    return chosen * (1 - inputs['features'][:, 2:3])
+class FGeo(EGeo):
+    initial_pdes = PARABOLIC + WAVES
 
+    def __init__(self, width, layers, heads, memory, wave_modes=32, initial_latent=32,
+                 assimilation=True, infer_operator=False, f_variant='base', f_steps=3):
+        super().__init__(width, layers, heads, memory, wave_modes, initial_latent, assimilation, infer_operator)
+        if f_variant not in ('base', 'align', 'iterative', 'observable') or f_steps not in (2, 3, 4):
+            raise ValueError('F needs base/align/iterative/observable and 2–4 correction steps')
+        self.f_variant, self.f_steps = f_variant, f_steps
+        self.flow_conditioned = False
+        self.register_buffer('_f_version', torch.tensor(1))
 
-class FGeo(AGeo):
-    def __init__(self, width, layers, heads, memory, evolution_steps=32):
-        super().__init__(width, layers, heads, memory)
-        self.evolution_steps = evolution_steps
-        operator_width = min(width, 64)
-        self.initial_head = mlp(2 * width, width, 2)
-        self.condition = mlp(2 * width, operator_width, operator_width)
-        self.state_input = nn.Linear(operator_width + 4, operator_width)
-        self.evolution = nn.ModuleList([GraphLayer(operator_width) for _ in range(2)])
-        self.acceleration = mlp(operator_width, operator_width, 1)
-        self.first_order = nn.Linear(operator_width, 3)
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        if prefix + '_f_version' not in state_dict or int(state_dict[prefix + '_f_version']) != 1:
+            raise ValueError('Old F checkpoints are incompatible with the new E-based F-Geo; use a new run')
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
-    def load_state_dict(self, state_dict, strict=True, **kwargs):
-        if 'first_order.weight' not in state_dict:
-            raise ValueError('This F-Geo checkpoint predates first-order evolution; use a new --run for the extended F-Geo experiment')
-        return super().load_state_dict(state_dict, strict=strict, **kwargs)
-
-    def encode(self, inputs):
+    def encode(self, inputs, correct=True):
         pde = PDES[inputs['pde']]
-        if pde not in PARABOLIC + WAVES:
-            return super().encode(inputs)
-        frequency = inputs.get('forcing_frequency', 0.)
-        if 'parameters' in inputs:
-            parameters = inputs['parameters'].clone()
-            parameters[:, 1] = torch.where(parameters[:, 2] != 0, parameters[:, 1], 0.)
-            inputs = dict(inputs, parameters=parameters)
-            frequency_rows = parameters[:, 0] == 6
-            if bool(frequency_rows.any()):
-                frequency = parameters[frequency_rows, 1].sum()
-        context = super().encode(inputs)
-        first_order = pde in PARABOLIC
-        scale = inputs['output_scales']; t0, duration = inputs['coordinate_bounds'][:, 2]
-        dt = duration / self.evolution_steps
-        state = initial_state(context, inputs, self.initial_head)
-        if first_order:
-            state = torch.stack([state[:, 0], torch.zeros_like(state[:, 0])], -1)
-        condition = self.condition(torch.cat([context['mesh'], context['global_h'].expand(len(state), -1)], -1))
-        free = 1 - inputs['features'][:, 2]
-        if first_order:
-            src, dst = inputs['edges'].T
-            distance2 = (inputs['nodes'][src] - inputs['nodes'][dst]).square().sum(-1).clamp_min(1e-12)
-            length2 = inputs['coordinate_bounds'][1, :2].square().mean()
-        states = [state]
-        for step in range(self.evolution_steps):
-            time = t0 + step * dt
-            forcing = inputs['field_values'][:, :1] * torch.cos(2 * math.pi * frequency * time)
-            clock = state.new_full((len(state), 1), step / self.evolution_steps)
-            h = self.state_input(torch.cat([condition, state / scale, clock, forcing / inputs['field_scales'][0]], -1))
-            for layer in self.evolution:
-                h = layer(h, inputs['nodes'], inputs['edges'])
-            if first_order:
-                rates = self.first_order(h)
-                diffusion = torch.nn.functional.softplus(rates[:, 0]) * length2 / duration
-                decay = torch.nn.functional.softplus(rates[:, 1]) / duration
-                drive = rates[:, 2] * scale[0] / duration
-                exchange = (diffusion[src] + diffusion[dst]) / (2 * distance2)
-                total = torch.zeros_like(free).index_add(0, dst, exchange)
-                neighbors = torch.zeros_like(free).index_add(0, dst, exchange * state[src, 0])
-                # Implicit self/decay, explicit neighbors: bounded relaxation when drive=0.
-                displacement = (state[:, 0] + dt * (neighbors + drive)) / (1 + dt * (total + decay)) * free
-                velocity = torch.zeros_like(displacement)
-            else:
-                acceleration = self.acceleration(h).squeeze(-1) * scale[0] / duration.square()
-                velocity = (state[:, 1] + dt * acceleration) * free
-                displacement = (state[:, 0] + dt * velocity) * free
-            state = torch.stack([displacement, velocity], -1)
-            states.append(state)
-        context.update(evolution_states=torch.stack(states), evolution_t0=t0, evolution_dt=dt, output_scales=scale)
-        return context
+        if pde not in self.initial_pdes:
+            return super().encode(inputs, correct=False)
+        raw = AGeo.encode(self, inputs)
+        raw.update(wave=None, f_inputs=inputs, f_prior=self.initial_condition(raw['global_h']))
+        observation_inputs(raw, inputs)
+        context = self.state_context(raw, raw['f_prior'], raw['log_coefficient'])
+        return self.finish(context) if correct else context
 
-    def decode(self, context, queries):
-        if 'evolution_states' not in context:
-            return super().decode(context, queries)
-        position = ((queries['coords'][:, 2] - context['evolution_t0']) / context['evolution_dt']).clamp(0, self.evolution_steps)
-        left = position.floor().long().clamp(max=self.evolution_steps - 1)
-        fraction = (position - left)[:, None, None]
-        states = context['evolution_states']; vertices = queries['vertices']
-        values = states[left[:, None], vertices] * (1 - fraction) + states[left[:, None] + 1, vertices] * fraction
-        return (values * queries['bary'][..., None]).sum(1) / context['output_scales']
-
-
-class SineLayer(nn.Module):
-    def __init__(self, inputs, outputs, omega, first=False):
-        super().__init__()
-        self.linear = nn.Linear(inputs, outputs)
-        self.omega = omega
-        bound = 1 / inputs if first else math.sqrt(6 / inputs) / omega
-        with torch.no_grad():
-            self.linear.weight.uniform_(-bound, bound)
-
-    def forward(self, values):
-        return torch.sin(self.omega * self.linear(values))
-
-
-class GGeo(DGeo):
-    def __init__(self, width, layers, heads, memory, fourier_bands=6, siren_omega=30.):
-        super().__init__(width, layers, heads, memory, fourier_bands)
-        self.output = nn.Sequential(SineLayer(width, width, siren_omega, first=True),
-                                    SineLayer(width, width, siren_omega), nn.Linear(width, 2))
-        with torch.no_grad():
-            bound = math.sqrt(6 / width) / siren_omega
-            self.output[-1].weight.uniform_(-bound, bound)
-
-
-class HGeo(AGeo):
-    def __init__(self, width, layers, heads, memory, green_sources=64):
-        super().__init__(width, layers, heads, memory)
-        self.green_sources = green_sources
-        self.initial_head = mlp(2 * width, width, 2)
-        self.source_head = mlp(2 * width, width, 1)
-        kernel_width = min(width, 32)
-        self.kernel_condition = nn.Linear(2 * width, kernel_width)
-        self.kernel = mlp(2 * kernel_width + 8, kernel_width, 3)
-
-    def encode(self, inputs):
-        context = super().encode(inputs)
-        if inputs['pde'] != 2:
-            return context
-        chosen = initial_state(context, inputs, self.initial_head)
-        features = torch.cat([context['mesh'], context['global_h'].expand(len(chosen), -1)], -1)
-        forcing = torch.where(inputs['field_masks'][:, :1].bool(), inputs['field_values'][:, :1],
-                              self.source_head(features) * inputs['field_scales'][0]).squeeze(-1)
-        # Known-operator kernels do not receive initial/forcing amplitudes or observations.
-        operator = context
-        if bool(inputs['field_masks'][:, 3].all()):
-            operator_inputs = dict(inputs, features=inputs['features'].clone())
-            operator_inputs['features'][:, 3:6] = 0
-            operator_inputs['features'][:, 7:10] = 0
-            operator_inputs.update(observations=torch.zeros_like(inputs['observations']),
-                                   observation_mask=torch.ones_like(inputs['observation_mask']))
-            operator = self.encoder(operator_inputs)
-        condition = self.kernel_condition(torch.cat([operator['mesh'], operator['global_h'].expand(len(chosen), -1)], -1))
-        weights = inputs['quadrature_weights']
-        if self.green_sources >= len(weights):
-            index = np.arange(len(weights)); selected_weights = weights
+    def state_context(self, raw, latent, log_coefficient):
+        """Decode only inferred initial values; E supplies all physical evolution."""
+        inputs = raw['f_inputs']; context = dict(raw, log_coefficient=log_coefficient)
+        pde = PDES[inputs['pde']]
+        if pde == 'wave':
+            context = EGeo.wave_context(self, context, inputs, latent, correct=False)
         else:
-            # Fixed importance samples of the lumped FEM quadrature, independent of targets/RNG.
-            index = np.random.default_rng(0).choice(len(weights), self.green_sources, replace=True, p=weights / weights.sum())
-            selected_weights = np.full(self.green_sources, weights.sum() / self.green_sources)
-        index = torch.as_tensor(index, dtype=torch.long, device=chosen.device)
-        context.update(wave_initial=chosen, output_scales=inputs['output_scales'], coordinate_bounds=inputs['coordinate_bounds'],
-                       green_condition=condition, green_source_condition=condition[index], green_source_nodes=inputs['nodes'][index],
-                       green_initial=chosen[index], green_forcing=forcing[index], forcing_frequency=inputs['forcing_frequency'],
-                       green_weights=torch.as_tensor(selected_weights, dtype=chosen.dtype, device=chosen.device),
-                       green_free=1 - inputs['features'][:, 2])
+            weights = torch.as_tensor(node_weights(inputs['evolution_geometry']), dtype=latent.dtype, device=latent.device)
+            geometry = self.initial_codec.geometry(inputs['nodes'], inputs['coordinate_bounds'], weights, inputs['features'][:, 2])
+            initial = self.initial_codec.decode(geometry, latent) * inputs['output_scales']
+            initial = torch.where(inputs['field_masks'][:, 1:3].bool(), inputs['field_values'][:, 1:3], initial)
+            if pde in PARABOLIC:
+                initial = torch.stack([initial[:, 0], torch.zeros_like(initial[:, 0])], -1)
+            # Supply the decoded state internally, without changing the conditioning or its masks.
+            fields = torch.cat([inputs['field_values'][:, :1], initial, inputs['field_values'][:, 3:]], -1)
+            masks = inputs['field_masks'].clone(); masks[:, 1:3] = 1
+            context = EGeo.evolution_context(self, context, dict(inputs, field_values=fields, field_masks=masks), pde)
+        context.update(wave_inputs=inputs, f_raw=raw, f_latent=latent, refinement_steps=0,
+                       f_refinement=self.f_variant in ('iterative', 'observable'))
         return context
 
-    def response(self, context, queries, coords):
-        lo, span = context['coordinate_bounds']; duration = span[2]
-        time = coords[:, 2:3] - lo[2]
-        x = (coords[:, :2] - lo[:2]) / span[:2]
-        y = (context['green_source_nodes'] - lo[:2]) / span[:2]
-        vertices, bary = queries['vertices'], queries['bary']
-        condition = (context['green_condition'][vertices] * bary[..., None]).sum(1)
-        count = len(y)
-        pairs = torch.cat([x[:, None].expand(-1, count, -1), y[None].expand(len(x), -1, -1), x[:, None] - y[None],
-                           condition[:, None].expand(-1, count, -1),
-                           context['green_source_condition'][None].expand(len(x), -1, -1)], -1)
-        def kernel_at(source_time):
-            clock = torch.stack([time / duration, source_time / duration], -1).expand(-1, count, -1)
-            return self.kernel(torch.cat([pairs, clock], -1))
-        kernel = kernel_at(torch.zeros_like(time))
-        scale = context['output_scales'][0]
-        initial = context['green_initial'] / scale
-        values = kernel[..., 0] * initial[None, :, 0]
-        values = values + kernel[..., 1] * (time / duration) * duration * initial[None, :, 1]
-        if bool(context['green_forcing'].any()):
-            # S(t-s)=(t-s)*K(t,s): midpoint quadrature makes the forced term O(t^2).
-            for fraction in (.25, .75):
-                source_time = fraction * time
-                forcing = context['green_forcing'][None] * torch.cos(2 * math.pi * context['forcing_frequency'] * (lo[2] + source_time))
-                values = values + .5 * (1 - fraction) * kernel_at(source_time)[..., 2] * forcing * duration.square() / scale
-        free = (context['green_free'][vertices] * bary).sum(1)
-        return (values * context['green_weights'][None]).sum(1) * scale / duration.square() * free
+    def finish(self, context):
+        if self.assimilation:
+            # A conditional flow has already seen these sensors: use only a small
+            # consistency refinement, rather than another independent Bayes update.
+            return self.refine(context, steps=1) if self.flow_conditioned else assimilate(self, context)
+        if self.f_variant == 'observable':
+            return self.refine(context, steps=0)
+        context = dict(context, assimilation_applied=False)
+        if len(context['assimilation_observations']):
+            error = observed_values(self, context) - context['assimilation_observations'][:, 4]
+            context.update(observation_error_before=error, observation_error_after=error)
+        return context
 
-    def decode(self, context, queries):
-        if 'wave_initial' not in context:
-            return super().decode(context, queries)
-        gradients = torch.is_grad_enabled(); fields = []
+    def with_initial_latent(self, context, latent):
+        if 'f_raw' not in context:
+            return context
+        raw = context['f_raw']
+        return self.finish(self.state_context(raw, latent, raw['log_coefficient']))
+
+    def reference_latent(self, case, scales):
+        if case['meta']['pde'] not in self.initial_pdes:
+            return next(self.parameters()).new_zeros(self.initial_latent)
+        geometry, values, weights = self.reference_initial(case, scales)
+        return self.initial_codec(geometry[0], values, weights)
+
+    def reference_initial(self, case, scales):
+        geometry, values, weights = super().reference_initial(case, scales)
+        if case['meta']['pde'] in PARABOLIC:
+            values = torch.stack([values[:, 0], torch.zeros_like(values[:, 0])], -1)
+        return geometry, values, weights
+
+    def representation_loss(self, case, scales):
+        geometry, target, weights = self.reference_initial(case, scales)
+        latent = self.initial_codec(geometry[0], target, weights)
+        channels = 2 if case['meta']['pde'] in WAVES else 1
+        error = (self.initial_codec.decode(geometry, latent)[:, :channels] - target[:, :channels]).square().mean(-1)
+        return (error * weights).sum() / weights.sum()
+
+    def alignment_loss(self, context, case, scales):
+        return (context['f_prior'] - self.reference_latent(case, scales).detach()).square().mean()
+
+    def sensitivity(self, predicted, state):
+        # A small observation-by-latent Jacobian. No second-order parameter graph.
+        if state.device.type == 'mps':
+            return torch.stack([torch.autograd.grad(y, state, retain_graph=True)[0] for y in predicted]).detach()
+        identity = torch.eye(len(predicted), dtype=state.dtype, device=state.device)
+        return torch.autograd.grad(predicted, state, identity, is_grads_batched=True, retain_graph=True)[0].detach()
+
+    def precision(self, jacobian, variance):
+        device = jacobian.device if jacobian.device.type != 'mps' else torch.device('cpu')
+        j = jacobian.to(device=device, dtype=torch.float64)
+        r = variance.to(device=device, dtype=torch.float64)
+        return torch.eye(j.shape[1], device=device, dtype=j.dtype) + j.T @ (j / r[:, None])
+
+    def refine(self, context, steps=None, return_stages=False):
+        """First-order smoothing; optionally return (result, initial/accepted contexts)."""
+        steps = self.f_steps if steps is None else steps
+        stages = [context] if return_stages else None
+        obs = context['assimilation_observations']; dimension = self.initial_latent
+        observable = self.f_variant == 'observable'
+        result = dict(context, assimilation_applied=False)
+        if not len(obs):
+            if observable:
+                result['latent_covariance'] = torch.eye(dimension, dtype=context['f_latent'].dtype, device=context['f_latent'].device)
+            return (result, stages) if return_stages else result
+        gradients = torch.is_grad_enabled()
+        raw = context['f_raw']; infer = bool(context.get('operator_inferred') and context['wave'] is not None)
+        prior = torch.cat([context['f_latent'], context['log_coefficient'].reshape(1)]) if infer else context['f_latent']
+        variance = obs[:, 5].square() + 1e-6
         with torch.enable_grad():
-            # Bound pairwise temporary tensors even for thousands of training queries.
-            for start in range(0, len(queries['coords']), 128):
-                q = {key: value[start:start + 128] for key, value in queries.items()}
-                coords = q['coords']
-                if not coords.requires_grad:
-                    coords = coords.detach().requires_grad_(True)
-                initial = (context['wave_initial'][q['vertices']] * q['bary'][..., None]).sum(1)
-                time = coords[:, 2] - context['coordinate_bounds'][0, 2]
-                u = initial[:, 0] + time * initial[:, 1] + time.square() * self.response(context, q, coords)
-                v = torch.autograd.grad(u.sum(), coords, create_graph=gradients, retain_graph=gradients)[0][:, 2]
-                fields.append(torch.stack([u, v], -1) / context['output_scales'])
-        field = torch.cat(fields)
-        return field if gradients else field.detach()
+            state = prior if prior.requires_grad else prior.detach().requires_grad_(True)
+            center = state.detach()
+            def prediction(value):
+                log_coefficient = value[-1] if infer else raw['log_coefficient']
+                c = self.state_context(raw, value[:dimension], log_coefficient)
+                return c, observed_values(self, c)
+            def objective(value, predicted):
+                return ((predicted - obs[:, 4]).square() / variance).sum() + (value - center).square().sum()
+            current, predicted = prediction(state)
+            before = predicted - obs[:, 4]; applied = 0
+            for _ in range(steps):
+                loss = objective(state, predicted)
+                gradient = torch.autograd.grad(loss, state, retain_graph=True)[0].detach()
+                if observable:
+                    precision = self.precision(self.sensitivity(predicted, state), variance)
+                    direction = .5 * torch.linalg.solve(precision, gradient.to(precision)).to(state)
+                else:
+                    direction = gradient / gradient.square().mean().sqrt().clamp_min(1.) * .25
+                direction = direction.detach()
+                if infer:
+                    direction = torch.cat([direction[:dimension], direction[-1:].clamp(-.25, .25)])
+                accepted = False
+                for rate in (1., .5, .25):
+                    candidate = state - rate * direction
+                    with torch.no_grad():
+                        _, trial = prediction(candidate)
+                        better = bool(objective(candidate, trial) < loss.detach())
+                    if better:
+                        state = candidate; current, predicted = prediction(state)
+                        applied += 1; accepted = True
+                        if return_stages:
+                            stages.append(dict(current, refinement_steps=applied, assimilation_applied=True))
+                        break
+                if not accepted:
+                    break
+            result = dict(current, assimilation_applied=applied > 0, refinement_steps=applied,
+                          observation_error_before=before, observation_error_after=predicted - obs[:, 4])
+            if observable:
+                precision = self.precision(self.sensitivity(predicted, state), variance)
+                covariance = torch.linalg.solve(precision, torch.eye(len(state), dtype=precision.dtype, device=precision.device))
+                result['latent_covariance'] = covariance[:dimension, :dimension].to(state)
+        if not gradients:
+            # Inference keeps no optimizer/unrolled graph alive between query chunks.
+            result = {k: v.detach() if torch.is_tensor(v) else v for k, v in result.items()}
+            if result['wave'] is not None:
+                result['wave'] = {k: v.detach() for k, v in result['wave'].items()}
+        return (result, stages) if return_stages else result

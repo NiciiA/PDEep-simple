@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 PRESETS = {
     's': dict(width=128, layers=6, heads=4, memory=16),
@@ -53,8 +54,25 @@ class GraphLayer(nn.Module):
         return self.norm(h + self.update(torch.cat([h, pooled / degree.clamp_min(1)[:, None]], -1)))
 
 
+class OperatorGraphLayer(nn.Module):
+    """Directed operand messages, with a distinct embedding for each input role."""
+    def __init__(self, width):
+        super().__init__()
+        from .operator_graph import EDGE_ROLES
+        self.roles = nn.Embedding(len(EDGE_ROLES), width)
+        self.message = mlp(2 * width, width, width)
+        self.update = mlp(2 * width, width, width)
+        self.norm = nn.LayerNorm(width)
+
+    def forward(self, h, edges):
+        src, dst, role = edges.T
+        messages = self.message(torch.cat([h[src], self.roles(role)], -1))
+        pooled = torch.zeros_like(h).index_add(0, dst, messages)
+        return self.norm(h + self.update(torch.cat([h, pooled], -1)))
+
+
 class PhysicalEncoder(nn.Module):
-    def __init__(self, width, heads):
+    def __init__(self, width, heads, joint_conditioning=False):
         super().__init__()
         self.mesh_input = mlp(15, width, width)
         self.basis_input = mlp(3, width, width)
@@ -65,6 +83,14 @@ class PhysicalEncoder(nn.Module):
         self.null = nn.Parameter(torch.randn(1, width) * .02)
         self.obs_attention = nn.MultiheadAttention(width, heads, batch_first=True)
         self.global_net = mlp(3 * width, width, width)
+        self.joint_conditioning = joint_conditioning
+        if joint_conditioning:
+            from .operator_graph import NODE_TYPES
+            self.pde_types = nn.Embedding(len(NODE_TYPES), width)
+            self.pde_message = nn.ModuleList([OperatorGraphLayer(width) for _ in range(2)])
+            self.pde_numbers = mlp(8, width, width)
+            self.field_refs = nn.Embedding(5, width)
+            self.basis_channels = nn.Embedding(4, width)
 
     def forward(self, inputs):
         basis = inputs['basis']
@@ -72,23 +98,36 @@ class PhysicalEncoder(nn.Module):
         if basis.shape[1]:
             encoded_basis = self.basis_input(torch.cat([xy, basis[..., None]], -1))
             if 'basis_channels' in inputs:
-                encoded_basis = encoded_basis + self.pde_types(inputs['basis_channels'])[None]
+                embedding = self.basis_channels if self.joint_conditioning else self.pde_types
+                encoded_basis = encoded_basis + embedding(inputs['basis_channels'])[None]
             prior_features = encoded_basis.mean(1)
         else:
             prior_features = torch.zeros((len(basis), self.null.shape[-1]), device=basis.device)
         h = self.mesh_input(inputs['features']) + prior_features
         for layer in self.graph:
             h = layer(h, inputs['nodes'], inputs['edges'])
-        types, edges = PDE_GRAPHS[inputs['pde']]
-        p = self.pde_types(torch.tensor(types, device=h.device))
-        adjacency = torch.zeros(len(types), len(types), device=h.device)
-        for i, j in edges:
-            adjacency[i, j] = adjacency[j, i] = 1
-        adjacency /= adjacency.sum(-1, keepdim=True).clamp_min(1)
-        for layer in self.pde_message:
-            p = p + layer(torch.cat([p, adjacency @ p], -1))
-        if 'parameters' in inputs:
-            p = torch.cat([p, self.basis_input(inputs['parameters'])])
+        if self.joint_conditioning:
+            from .operator_graph import operator_graph
+            graph = operator_graph(inputs)
+            p = self.pde_types(graph['types']) + self.pde_numbers(graph['numbers']) + self.field_refs(graph['fields'])
+            for layer in self.pde_message:
+                p = layer(p, graph['edges'])
+            if 'coefficient_samples' in inputs:
+                # Preserve exact permitted element coefficients as spatial tokens,
+                # explicitly associated with the graph's coefficient-field node.
+                coefficient_node = p[graph['fields'] == 4][0]
+                p = torch.cat([p, self.basis_input(inputs['coefficient_samples']) + coefficient_node])
+        else:
+            types, edges = PDE_GRAPHS[inputs['pde']]
+            p = self.pde_types(torch.tensor(types, device=h.device))
+            adjacency = torch.zeros(len(types), len(types), device=h.device)
+            for i, j in edges:
+                adjacency[i, j] = adjacency[j, i] = 1
+            adjacency /= adjacency.sum(-1, keepdim=True).clamp_min(1)
+            for layer in self.pde_message:
+                p = p + layer(torch.cat([p, adjacency @ p], -1))
+            if 'parameters' in inputs:
+                p = torch.cat([p, self.basis_input(inputs['parameters'])])
         # Always-valid null token makes an empty observation set safe.
         obs = torch.cat([self.null, self.obs_input(inputs['observations'])], 0)
         padding = torch.cat([torch.zeros(1, dtype=torch.bool, device=h.device), inputs['observation_mask']])
@@ -130,17 +169,56 @@ class AttentionBlock(nn.Module):
         self.ff = mlp(width, 2 * width, width)
         self.norm1, self.norm2 = nn.LayerNorm(width), nn.LayerNorm(width)
 
-    def forward(self, h, memory, padding=None):
-        out, _ = self.attention(h[None], memory[None], memory[None],
-                                key_padding_mask=None if padding is None else padding[None], need_weights=True)
-        h = self.norm1(h + out[0])
+    def forward(self, h, memory, padding=None, bias=None, observation_start=0):
+        if bias is None:
+            out, _ = self.attention(h[None], memory[None], memory[None],
+                                    key_padding_mask=None if padding is None else padding[None], need_weights=True)
+            out = out[0]
+        else:
+            # Use this block's existing MHA projections and output. Add only a
+            # Q-by-sensor bias slice, without allocating another Q-by-mesh mask.
+            heads = self.attention.num_heads
+            dimension = h.shape[-1] // heads
+            weights = self.attention.in_proj_weight.chunk(3)
+            offsets = self.attention.in_proj_bias.chunk(3)
+            q, k, v = [F.linear(x, w, b).reshape(len(x), heads, dimension).transpose(0, 1)
+                       for x, w, b in zip((h, memory, memory), weights, offsets)]
+            logits = (q / math.sqrt(dimension)) @ k.transpose(-1, -2)
+            end = observation_start + bias.shape[-1]
+            logits[:, :, observation_start:end] = logits[:, :, observation_start:end] + bias
+            if padding is not None:
+                logits = logits.masked_fill(padding[None, None], float('-inf'))
+            out = (logits.softmax(-1) @ v).transpose(0, 1).reshape_as(h)
+            out = self.attention.out_proj(out)
+        h = self.norm1(h + out)
         return self.norm2(h + self.ff(h))
 
 
-class AGeo(nn.Module):
-    def __init__(self, width, layers, heads, memory):
+class ObservationBias(nn.Module):
+    """Per-head sensor logit bias; signed, scaled space/time and normalized noise."""
+    def __init__(self, heads):
         super().__init__()
-        self.encoder = PhysicalEncoder(width, heads)
+        self.quantity = nn.Embedding(2, 8)  # Existing IDs: scalar/u=0, wave v=1.
+        self.network = mlp(13, 32, heads)
+
+    def forward(self, context, coords):
+        obs = context['observation_tokens']
+        delta = (coords[:, None] - obs[None, :, :3]) / context['relative_scale']
+        if not context['time_dependent']:
+            delta = torch.cat([delta[..., :2], torch.zeros_like(delta[..., 2:3])], -1)
+        # Smooth spatial norm also supports the optional derivative-based losses.
+        distance = torch.sqrt(delta[..., :2].square().sum(-1, keepdim=True) + 1e-12)
+        quantity = self.quantity(obs[:, 3].long()).expand(len(coords), -1, -1)
+        uncertainty = obs[:, 5].clamp_min(1e-8).log()[None, :, None].expand(len(coords), -1, -1)
+        relative = torch.cat([delta, distance, quantity, uncertainty], -1)
+        return self.network(relative).permute(2, 0, 1)
+
+
+class AGeo(nn.Module):
+    def __init__(self, width, layers, heads, memory, joint_conditioning=False):
+        super().__init__()
+        self.joint_conditioning = joint_conditioning
+        self.encoder = PhysicalEncoder(width, heads, joint_conditioning)
         self.tokens = nn.Parameter(torch.randn(memory, width) * .02)
         self.aggregate = AttentionBlock(width, heads)
         self.coordinates = Coordinates(width)
@@ -148,20 +226,59 @@ class AGeo(nn.Module):
         self.decoder = nn.ModuleList([AttentionBlock(width, heads) for _ in range(layers)])
         self.output = mlp(width, width, 2)
         self.parameter = mlp(width, width, 1)
+        if joint_conditioning:
+            self.mesh_fusion = AttentionBlock(width, heads)
+            self.observation_bias = ObservationBias(heads)
+            self.register_buffer('_joint_version', torch.tensor(1))
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        joint = prefix + '_joint_version' in state_dict
+        if joint != self.joint_conditioning:
+            raise ValueError('Original and joint-conditioning A checkpoints are incompatible; train the new variant from scratch')
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def encode(self, inputs):
         context = self.encoder(inputs)
-        memory = torch.cat([context['mesh'], context['pde'], context['obs'][~context['padding']]])
-        global_tokens = self.aggregate(self.tokens + context['global_h'], memory)
+        padding = None
+        if self.joint_conditioning:
+            from .data import PDES
+            from .physics import PARABOLIC, WAVES
+            context['physical_mesh'] = context['mesh']
+            conditioning = torch.cat([context['pde'], context['obs']])
+            padding = torch.cat([context['padding'].new_zeros(len(context['pde'])), context['padding']])
+            context['mesh'] = self.mesh_fusion(context['mesh'], conditioning, padding)
+            context['global_h'] = self.encoder.global_net(torch.cat([
+                context['mesh'].mean(0), context['pde'].mean(0), context['obs'][~context['padding']].mean(0)]))
+            # Only valid sensors enter decoder memory; the null stays valid.
+            memory = torch.cat([context['mesh'], context['pde'], context['obs'][~context['padding']]])
+            padding = None
+            context.update(observation_tokens=inputs['observations'][~inputs['observation_mask']],
+                           observation_start=len(context['mesh']) + len(context['pde']) + 1,
+                           relative_scale=inputs['coordinate_bounds'][1].clamp_min(1e-8),
+                           time_dependent=PDES[inputs['pde']] in PARABOLIC + WAVES)
+        else:
+            memory = torch.cat([context['mesh'], context['pde'], context['obs'][~context['padding']]])
+        global_tokens = self.aggregate(self.tokens + context['global_h'], memory, padding)
         context['memory'] = torch.cat([memory, global_tokens])
         context['log_coefficient'] = self.parameter(context['global_h']).squeeze(-1)
         return context
 
     def decode(self, context, queries):
-        local = torch.cat(local_features(context, queries), -1)
+        bias = None
+        if self.joint_conditioning:
+            def interpolate(features):
+                return (features[queries['vertices']] * queries['bary'][..., None]).sum(1)
+            # Keep original local physics alongside the fused spatial features.
+            # The fixed Gaussian sensor summary is replaced by relative attention.
+            local = torch.cat([interpolate(context['physical_mesh']), interpolate(context['mesh']),
+                               context['global_h'].expand(len(queries['coords']), -1)], -1)
+            if len(context['observation_tokens']):
+                bias = self.observation_bias(context, queries['coords'])
+        else:
+            local = torch.cat(local_features(context, queries), -1)
         h = self.coordinates(queries['coords']) + self.local(local)
         for block in self.decoder:
-            h = block(h, context['memory'])
+            h = block(h, context['memory'], bias=bias, observation_start=context.get('observation_start', 0))
         return self.output(h)
 
     def forward(self, inputs, queries):
@@ -437,10 +554,10 @@ class EGeo(AGeo):
 
 
 def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
-                fourier_bands=6, wave_modes=32, evolution_steps=32, siren_omega=30., green_sources=64,
-                initial_latent=None, assimilation=False, infer_operator=False):
+                fourier_bands=6, wave_modes=32, initial_latent=None, assimilation=None, infer_operator=False,
+                f_variant='base', f_steps=3, joint_conditioning=False):
     config = PRESETS[size].copy()
-    if kind in ('A', 'D', 'E', 'F', 'G', 'H') and size == 'l':
+    if kind in ('A', 'D', 'E', 'F') and size == 'l':
         config['layers'] = 8  # about 28M for A, nine FiLM layers give about 27M for C
     for name, value in dict(width=width, layers=layers, heads=heads, memory=memory).items():
         if value is not None:
@@ -451,24 +568,26 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
         raise ValueError('fourier-bands and wave-modes must be positive')
     classes = dict(A=AGeo, C=CGeo, D=DGeo, E=EGeo)
     options = dict(fourier_bands=fourier_bands) if kind == 'D' else dict(wave_modes=wave_modes) if kind == 'E' else {}
+    if joint_conditioning:
+        if kind != 'A':
+            raise ValueError('--joint-conditioning is only available for A-Geo')
+        options['joint_conditioning'] = True
     if initial_latent is not None and initial_latent < 1:
         raise ValueError('initial-latent must be positive')
     if initial_latent is not None or assimilation or infer_operator:
-        if kind != 'E':
-            raise ValueError('initial-latent, assimilation and infer-operator are E-Geo options')
-        options.update(initial_latent=initial_latent, assimilation=assimilation, infer_operator=infer_operator)
-    if kind in ('F', 'G', 'H'):
-        from .propagation import FGeo, GGeo, HGeo
-        if evolution_steps < 1 or green_sources < 1 or not math.isfinite(siren_omega) or siren_omega <= 0:
-            raise ValueError('evolution-steps, green-sources and finite siren-omega must be positive')
-        classes.update(F=FGeo, G=GGeo, H=HGeo)
-        if kind == 'F':
-            options = dict(evolution_steps=evolution_steps)
-        elif kind == 'G':
-            options = dict(fourier_bands=fourier_bands, siren_omega=siren_omega)
-        else:
-            options = dict(green_sources=green_sources)
+        if kind not in ('E', 'F'):
+            raise ValueError('initial-latent, assimilation and infer-operator are E/F-Geo options')
+        options.update(initial_latent=initial_latent, assimilation=bool(assimilation), infer_operator=infer_operator)
+    if kind == 'F':
+        from .propagation import FGeo
+        classes['F'] = FGeo
+        options = dict(wave_modes=wave_modes, initial_latent=initial_latent or 32,
+                       assimilation=True if assimilation is None else assimilation, infer_operator=infer_operator,
+                       f_variant=f_variant, f_steps=f_steps)
+    if kind not in classes:
+        raise ValueError('available models are A, C, D, E and the new F; G/H were removed')
     model = classes[kind](**config, **options)
     if report:
-        print(f'{kind}-Geo {size}: {sum(p.numel() for p in model.parameters()):,} parameters; {config}')
+        variant = ' joint-conditioning' if joint_conditioning else ''
+        print(f'{kind}-Geo{variant} {size}: {sum(p.numel() for p in model.parameters()):,} parameters; {config}')
     return model
