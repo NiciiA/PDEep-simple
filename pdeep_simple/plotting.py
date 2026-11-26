@@ -288,7 +288,7 @@ def reconstruction_plots(directory, out, maximum):
 
 def evaluation_directory(run):
     """Most recent default full/selected evaluation, or an explicit result directory."""
-    candidates = [run, run / 'evaluation'] + list((run / 'evaluations').glob('selection_*'))
+    candidates = [run, run / 'evaluation'] + list((run / 'evaluations').glob('selection_*')) + list(run.glob('selection_*'))
     candidates = [path for path in candidates if (path / 'evaluation.json').exists()]
     if candidates:
         return max(candidates, key=lambda path: (path / 'evaluation.json').stat().st_mtime_ns)
@@ -415,6 +415,9 @@ def plot(args):
             from .comparison import load_field, uncertainty_plot
             for path in sorted(directory.glob('*.npz'))[:maximum]:
                 uncertainty_plot(load_field(path), out, path.stem)
+                if what == 'fields' or 'fields' not in args.what.split(','):
+                    from .prism_evaluation import physical_plots
+                    physical_plots(path, out)
         elif what == 'comparisons':
             comparison_plots([run] + [Path(p) for p in args.compare], out, args.metric)
         else:

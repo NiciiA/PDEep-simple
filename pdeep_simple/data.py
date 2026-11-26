@@ -469,6 +469,13 @@ def model_input(case, mode, obs, scales, rng, device='cpu'):
     result['coordinate_bounds'] = tensor(np.stack([lo, span]))
     result['output_scales'] = tensor(scales['output'])
     result['field_scales'] = tensor(scales['fields'])
+    # Geometry/prior declarations used by B; no hidden realizations are added.
+    result['triangles'] = tensor(case['triangles'], torch.long)
+    result['node_weights'] = tensor(node_weights(case))
+    kind = case['meta'].get('coefficient_kind', 'smooth' if case['meta']['tier'] == 'T4' else 'constant')
+    bounds = case['meta'].get('distributions', {}).get('coefficient', [])
+    bounds = bounds if isinstance(bounds, list) and len(bounds) == 2 else [0., 0.]
+    result['physical_layout'] = dict(constant_coefficient=kind == 'constant', coefficient_bounds=bounds)
     # Geometry and fully revealed operator only: no target fields enter the modal branch.
     physical = case['meta'].get('parameters', {})
     if (case['meta']['pde'] == 'wave' and masks[:, 3].all() and

@@ -31,6 +31,8 @@ def write_rows(path, rows):
 
 
 def model_label(config):
+    if config['model'] == 'B':
+        return 'B-' + config.get('b_routing', 'dynamic').capitalize()
     if config['model'] == 'F':
         return 'F-' + config.get('f_variant', 'base').capitalize() + ('-Flow' if config.get('flow') else '')
     return config['model'] + ('-Flow' if config.get('flow') else '-Geo')
@@ -169,7 +171,7 @@ def numerical_reference(case, levels):
 
 
 def prediction_values(model, context, case, coords, scales, chunk, latents=None,
-                      save_samples=4, interval=.9):
+                      save_samples=4, interval=.9, sample_reference=None, sample_weights=None):
     """Chunk coordinates, retaining only a few whole-field samples for figures.
 
     The same latents are reused in every chunk, time slice, and evaluation grid.
@@ -184,6 +186,7 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
     mean = np.empty(size, np.float32)
     std = np.full(size, np.nan, np.float32); lower = std.copy(); upper = std.copy()
     kept = np.empty((min(save_samples, len(latent_contexts)), *size), np.float32) if latents is not None else np.empty((0, *size), np.float32)
+    sample_squared = np.zeros((len(latent_contexts), 2))
     with torch.no_grad():
         for start in range(0, len(coords), chunk):
             stop = min(start + chunk, len(coords))
@@ -193,14 +196,19 @@ def prediction_values(model, context, case, coords, scales, chunk, latents=None,
             if not np.isfinite(fields).all():
                 raise RuntimeError('non-finite field prediction; no metrics saved for this case')
             # Keep identical F samples at exactly zero spread, including known Forward states.
-            statistics = fields.astype(np.float64) if hasattr(getattr(model, 'base', model), 'f_variant') else fields
+            statistics = fields.astype(np.float64) if hasattr(getattr(model, 'base', model), 'f_variant') or hasattr(model, 'codec') else fields
+            if sample_reference is not None:
+                sample_squared += ((fields - sample_reference[None, start:stop]) ** 2 * sample_weights[None, start:stop, None]).sum(1)
             mean[start:stop] = statistics.mean(0)
             if latents is not None:
                 kept[:, start:stop] = fields[:len(kept)]
                 if len(fields) > 1:
                     std[start:stop] = statistics.std(0, ddof=1)
                     lower[start:stop], upper[start:stop] = np.quantile(statistics, [(1 - interval) / 2, (1 + interval) / 2], axis=0)
-    return mean, dict(sample_std=std, lower=lower, upper=upper, sample_fields=kept, diagnostics=diagnostics)
+    result = dict(sample_std=std, lower=lower, upper=upper, sample_fields=kept, diagnostics=diagnostics)
+    if sample_reference is not None:
+        result['sample_rmse'] = np.sqrt(sample_squared / sample_weights.sum())
+    return mean, result
 
 
 def classical_values(prepared, case, coords, chunk, interval=.9):
@@ -236,9 +244,14 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
     device = options.get('device', 'cpu') if model is not None else 'cpu'
     samples = options.get('samples', 32) if model_config and model_config.get('flow') else 0
     grids = [(g, evaluation_grid(case, g)) for g in options['grids']]
+    is_b = bool(model_config and model_config.get('model') == 'B')
+    nested = options.get('nested_observations', False)
+    full_obs = observations(case, max(options['observations']), options['noise'],
+                            np.random.default_rng(draw_seed + max(options['observations']))) if nested else None
     for mode in options['modes']:
         for count in options['observations']:
-            obs = observations(case, count, options['noise'], np.random.default_rng(draw_seed + count))
+            obs = ({key: value[:count] for key, value in full_obs.items()} if nested else
+                   observations(case, count, options['noise'], np.random.default_rng(draw_seed + count)))
             for method in methods:
                 coefficient = None; extra = {}; latents = None
                 sync(device); started = time.perf_counter()
@@ -268,6 +281,10 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                          evolution_rule=context.get('evolution_kind', 'wave' if pde == 'wave' else 'coordinate'))
                         if samples:
                             latents = model.sample_latents(context, samples, options['flow_steps'], draw_seed)
+                        if is_b:
+                            from .prism_evaluation import posterior_diagnostics
+                            b_metrics, b_arrays = posterior_diagnostics(model, context, latents, case, options['interval'])
+                            extra.update(b_arrays)
                         if meta['tier'] == 'T2':
                             coefficient = float(torch.stack([model.with_latent(context, z)['log_coefficient'].exp()
                                                              for z in latents]).mean().cpu()) if samples and not getattr(model, 'initial_only', False) else float(context['log_coefficient'].exp().cpu())
@@ -277,12 +294,15 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                     nodal, nodal_spread = classical_values(prepared, case, nodal_coords, options['chunk'], options['interval'])
                 else:
                     nodal, nodal_spread = prediction_values(model, context, case, nodal_coords, scales, options['chunk'],
-                                                            latents, options['save_samples'], options['interval'])
+                                                            latents, options['save_samples'], options['interval'],
+                                                            interpolate(reference, nodal_coords) if is_b else None,
+                                                            (tw[:, None] * node_weights(case)[None]).ravel() if is_b else None)
                 sync(device); nodal_seconds = time.perf_counter() - started
                 nodal = nodal.reshape(len(times), -1, 2)
                 extra.update(nodal_spread.get('diagnostics', {}))
                 coefficient = extra.get('coefficient_prediction', coefficient)
                 diagnostics = residual_diagnostics(case, nodal, times, mode, draw_seed, coefficient)
+                if is_b: diagnostics.update(b_metrics)
                 if model_config and model_config.get('model') in ('E', 'F'):
                     if any(model_config.get(key) for key in ('initial_latent', 'assimilation', 'infer_operator')):
                         diagnostics.setdefault('operator_inferred', 0.)
@@ -321,7 +341,9 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                             prediction, spread = classical_values(prepared, case, coords, options['chunk'], options['interval'])
                         else:
                             prediction, spread = prediction_values(model, context, case, coords, scales, options['chunk'],
-                                                                    latents, options['save_samples'], options['interval'])
+                                                                    latents, options['save_samples'], options['interval'],
+                                                                    truth.reshape(-1, 2) if is_b else None,
+                                                                    (tw[:, None] * spatial[None]).ravel() if is_b else None)
                         sync(device); elapsed = setup_seconds + time.perf_counter() - started
                         field = prediction.reshape(truth.shape)
                     weights = tw[:, None] * spatial[None]
@@ -351,6 +373,12 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                interval_coverage=float(np.average((target >= lo) & (target <= hi), weights=w)) if available else np.nan,
                                                interval_width=float(np.average(hi - lo, weights=w)) if available else np.nan,
                                                interval_probability=options['interval'])
+                            if is_b:
+                                scores = spread['sample_rmse'][:, channel]
+                                uncertainty.update(sample_solution_rmse_all_times_mean=float(scores.mean()),
+                                                   sample_solution_normalized_rmse_all_times_mean=float(scores.mean() / scales['output'][channel]),
+                                                   sample_solution_rmse_all_times_min=float(scores.min()),
+                                                   sample_solution_rmse_all_times_max=float(scores.max()))
                             ref_error = (coarse[:, :, channel] - truth[:, :, channel]) if it is None else (coarse[it, :, channel] - truth[it, :, channel])
                             rows.append(dict(base, time='all' if it is None else float(times[it]),
                                              **error_metrics(pred, target, w, scales['output'][channel]), **common, **uncertainty,
@@ -372,6 +400,8 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                                                                            if model_config and model_config.get(key)},
                                                                         **{key: model_config[key] for key in ('f_variant', 'f_steps', 'f_architecture')
                                                                            if model_config and model_config.get('model') == 'F' and key in model_config},
+                                                                        **{key: model_config[key] for key in ('b_routing', 'b_info_rank', 'b_tau', 'b_info_updates', 'b_latent_dim')
+                                                                           if is_b and key in model_config},
                                                                         **{key: extra[key] for key in ('modal_wave', 'wave_modes', 'initial_aware_wave',
                                                                                                       'modal_evolution', 'initial_aware_evolution', 'evolution_rule') if key in extra},
                                                                         **{key: extra[key] for key in MAP_STATS if key in extra}))))
@@ -379,6 +409,7 @@ def evaluate_case(path, options, scales, methods, out, save=False, model=None, m
                         arrays.update(known_field_mask=field_mask.astype(bool), known_scalar_mask=scalar_mask.astype(bool))
                         if latents is not None:
                             arrays['latents'] = latents.detach().cpu().numpy()
+                        if is_b: arrays['sample_solution_rmse'] = spread['sample_rmse']
                         arrays.update(grid_arrays)
                         arrays.update({k: v for k, v in extra.items() if isinstance(v, np.ndarray)})
                         if 'amplitude_covariance' in extra or method == 'gp':
@@ -498,7 +529,8 @@ def evaluate(args, baseline=False):
                    save_samples=getattr(args, 'save_samples', 0), interval=getattr(args, 'interval', .9))
     (out / 'evaluation.json').write_text(json.dumps(dict(options, methods=methods, scales=scales,
         model_options={key: config.get(key) for key in ('model', 'initial_latent', 'assimilation', 'infer_operator', 'flow',
-                                                       'f_variant', 'f_steps', 'align_weight', 'f_architecture')},
+                                                       'f_variant', 'f_steps', 'align_weight', 'f_architecture',
+                                                       'b_routing', 'b_info_rank', 'b_tau', 'b_info_updates', 'b_latent_dim')},
         cases=[str(p.resolve()) for p in paths], data=str(Path(args.data).resolve()),
         reference='stored P1 fields' if not args.refine else 'refined FEM with prolonged original P1 physical inputs; observations unchanged',
         uncertainty='empirical flow intervals are not claimed calibrated; T1/G1 Gaussian elliptic Bayes exact only for stored discrete Gaussian model'), indent=2))

@@ -1,6 +1,6 @@
 # PDEep/simple
 
-Numerical PDE datasets, deterministic A/C/D/E/F-Geo reconstructions, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
+Numerical PDE datasets, A/C/D/E/F-Geo reconstructions, B-Geo information-routed physical posterior generation, conditional latent flows and classical baselines. The same CLI handles every supported tier; no notebook-specific training code is needed.
 
 ## Installation and quick start
 
@@ -190,6 +190,150 @@ The sensor bias is computed once per query chunk and reused by all decoder
 layers, without another dense query-to-mesh bias matrix. Standard query attention
 still reads A's full memory. Accuracy improvements need training and comparison;
 none are assumed here.
+
+### B-Geo: PRISM research implementation
+
+B generates **physical causes**, then passes each candidate through a learned
+forward solution operator. Its posterior is approximate; it is not an established
+Bayesian solver or evidence of generalization to arbitrary equations.
+
+The physical codec has a configurable 128-dimensional latent, grouped by forcing,
+initial displacement/temperature, initial velocity, and coefficient. A shared
+coordinate/geometry decoder is nonlinear in the latent. Wave u0 and v0 have
+separate reconstruction losses. Known entries are clamped exactly; coefficients
+are positive, with scalar prior bounds used where the dataset supplies a range.
+An exact known entry of a declared constant coefficient fixes it globally; this
+information is propagated without reading any hidden entries.
+Physical reconstruction uses the training field scales (including separate u0/v0
+scales); solution and sensor likelihoods use the solution-output scales.
+Current boundary conditions, beta, damping, reaction and advection are supplied
+and stay known: B does not invent unknown versions of these quantities.
+
+The forward network reuses A's memory/query decoder and the existing directed
+physical encoder. It receives complete **candidate** fields and no observations,
+original sensor values, or FEM operator caches. E's initial-state anchoring and
+v=du/dt are reused for time-dependent equations; no modal basis or numerical solver
+is run at inference. One candidate determines the entire trajectory at all query
+coordinates. Forward error, boundary error and PDE residuals can remain nonzero.
+
+The posterior network uses the same physical/observation encoder and one shared
+attention backbone (medium: width 256, eight heads, six layers). Four interacting
+hypothesis tokens describe candidate physical groups. Compact information tokens
+carry sensitivity directions and their strengths. These groups are **not** fixed
+observable/ambiguous latent coordinates.
+
+Training-only complete physical representations estimate a regularized covariance
+and Cholesky whitening transform; both directions of the transform are saved in
+the checkpoint. Whitening is approximate and does not establish a Gaussian
+physical prior. Conditional flow matching transports a Gaussian base to the
+conditional physical latent distribution, including zero-sensor conditional priors.
+
+For each selected candidate, B differentiates only the point-sensor predictions:
+J=dh/dz and G=J^T Sigma_eff^-1 J, in whitened latent coordinates. Sensor values,
+predictions and noise use the same quantity-specific scales. Sigma_eff includes
+measurement variance, a small numerical floor, and per-output forward-validation
+MSE as a conservative surrogate-error estimate. This global error floor is not a
+calibrated, state-dependent surrogate error model.
+The variance enters routing and likelihood diagnostics; CFM learns from FEM
+observations and does not perform an exact likelihood-corrected Bayesian update.
+
+The retained eigenvectors implement W v = V diag(lambda/(lambda+tau)) V^T v
+without a dense projector. Two small heads share the attention backbone:
+v = W*v_evidence + (I-W)*v_ambiguity. Projected head supervision has weight .1;
+a small initial-estimate loss has weight .05. Gradients stop through the information
+calculation. `--b-routing ordinary` uses ordinary CFM with the same two-head
+capacity and no information calculation; `fixed` computes information once at a
+learned initial estimate; `dynamic` refreshes at selected states of each sample
+(default start and midpoint). Both heads see the full context and latent state.
+Zero observations give W=0; completely known physical systems bypass posterior
+integration and use the known fields directly.
+
+Three explicit stages share one model/checkpoint and existing data/loss conventions:
+
+1. Physical representation and per-quantity reconstruction.
+2. Forward operator, supervised with complete FEM physical inputs and field targets.
+3. Frozen codec/forward operator, trainable conditioning and routed posterior flow.
+
+The stage counts below are an experimental allocation, **not a claim of sufficient
+training**. B is inherently generative; `--flow` is unnecessary. Run from the package root:
+
+```bash
+python -u -m pdeep_simple train --data data/colab_g2 --model B --size m \
+  --b-repr-updates 1000 --b-forward-updates 2000 --updates 5000 \
+  --b-latent-dim 128 --b-info-rank 16 --b-tau 1 --b-routing dynamic \
+  --modes forward,inverse,hybrid --loss "field=1" \
+  --batch 16 --queries 4096 --observations 0,8,16,32,64,128 \
+  --noise .01 --seed 42 --validate-every 500 --device cuda --run runs/colab_b
+
+python -m pdeep_simple eval --data data/colab_g2 --run runs/colab_b \
+  --pde wave --modes forward,inverse,hybrid --observations 0,8,32,128 \
+  --nested-observations --noise .01 --seed 123 --frames 21 --max-cases 3 \
+  --samples 16 --flow-steps 32 --device cuda --out runs/eval_b_wave
+
+python -m pdeep_simple plot --run runs/eval_b_wave --what fields,uncertainty
+```
+
+Of 5,000 updates, 1,000 train the codec, 2,000 train the forward map and 2,000 train
+the posterior. Resume restores these settings and optimizer/RNG state. Flow-stage
+validation uses CFM loss; use `eval` for posterior-mean field accuracy and coverage.
+Training noise varies from .5 to 1.5 times `--noise`. A/B/C/D/E/F share existing
+sampling and mask definitions; B additionally trains inverse/hybrid zero-sensor
+priors. `--nested-observations` explicitly uses prefixes of one common sensor draw
+across counts, and can also be used for matching baseline observations.
+
+Optional `--b-sensitivity-weight .001` adds forward directional supervision for
+multiplicative coefficient changes, using neural JVPs and centered differences
+from two existing FEM solves on 16 queries. It is omitted for p-Laplacian, whose
+solver does not use that coefficient. Other physical sensitivities receive field
+supervision only; their derivative accuracy has not been established.
+
+Evaluation retains ordinary PDE/mode/count/geometry/time/u-v metrics, posterior
+mean/std/intervals and solution sample plots. B also saves physical means/std,
+reference fields, physical samples, scalar coefficient samples, per-sample solution
+RMSE, leading information eigenvalues/weights, and candidate states at refreshes.
+Metrics include unknown-entry physical RMSE/coverage, observation residuals,
+effective information dimension and counts of retained weights >= .5. `plot`
+adds physical uncertainty maps, coefficient histograms and information spectra.
+Reference quantities are accessed only for training targets and evaluation errors.
+
+All ten existing PDE families use the same codec and learned forward network:
+Poisson, diffusion, heat, wave, semilinear, ADR, reaction-diffusion, damped wave,
+p-Laplacian and Eikonal. G1 wave speed is known; its inverse task hides initial
+fields (and nonzero configured forcing). T2 supplies scalar-coefficient inverse
+tasks; T3 diffusion supplies spatial-coefficient inversion; Eikonal hides speed.
+Known damping/reaction are supported, their inversion is not. No new PDEs,
+boundary types, sensor types or numerical solvers are introduced.
+
+For ablations, train separate runs with `--b-routing ordinary`, `fixed`, and
+`dynamic`, keeping all dimensions, stage allocations, data and random seeds the
+same. An isolated exact linear-Gaussian experiment uses B's actual routed-flow
+component with an identity codec and exact linear forward map:
+
+```bash
+python scripts/prism_gaussian.py                         # exact reference; no training
+python scripts/prism_gaussian.py --updates 2000 --routing dynamic --samples 256
+```
+
+It prints learned versus exact posterior mean/covariance errors after requested
+training. In this linear problem fixed/dynamic information coincide. This isolates
+transport quality and does not qualify the complete learned PDE model as calibrated.
+
+Information computation forms an exact sensor-by-latent Jacobian in VJP blocks of
+eight (scalar VJPs on MPS), then a small CPU float64 eigensolve. Only the leading
+`--b-info-rank` directions are retained. Rank truncation treats discarded likelihood
+information as zero; reducing rank does not reduce the exact-Jacobian cost. The
+cost scales with sensor count and refresh count, and can dominate sampling. CSV
+metrics report actual `information_seconds` and refresh counts. Candidate forward
+contexts are cached across query chunks/grids; there are no repeated FEM modes.
+CUDA/MPS use ordinary PyTorch; small whitening/eigen solves use CPU when needed.
+
+Local likelihood sensitivity is not global identifiability, and it can miss
+disconnected posterior modes. The latent representation, Gaussian-base transport,
+finite rank, limited training and neural forward derivatives all introduce
+approximation. Forward intervals express physical-state sampling uncertainty,
+not a full distribution of surrogate error. No optional joint-refinement stage,
+streaming update operator, active sensing, or equation discovery is added. Original
+A (including joint conditioning), C, D, E and F behavior/checkpoints are unchanged.
 
 ### C-Geo
 

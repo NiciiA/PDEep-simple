@@ -30,8 +30,8 @@ def load_checkpoint(path, device='cpu'):
 
 
 def model_from_config(config, device='cpu', report=True):
-    if config.get('flow') and config['model'] not in ('A', 'C', 'E', 'F'):
-        raise ValueError('--flow supports A/C and compact-initial E/F only')
+    if config.get('flow') and config['model'] not in ('A', 'B', 'C', 'E', 'F'):
+        raise ValueError('--flow supports A/B/C and compact-initial E/F only')
     if config.get('flow') and config['model'] == 'E' and not config.get('initial_latent'):
         raise ValueError('E-Geo flow requires --initial-latent (e.g. 32)')
     assimilation = config.get('assimilation')
@@ -44,8 +44,10 @@ def model_from_config(config, device='cpu', report=True):
                         assimilation=assimilation,
                         infer_operator=config.get('infer_operator', False),
                         f_variant=config.get('f_variant', 'base'), f_steps=config.get('f_steps', 3),
-                        joint_conditioning=config.get('joint_conditioning', False))
-    if config.get('flow'):
+                        joint_conditioning=config.get('joint_conditioning', False),
+                        **{key: config[key] for key in ('b_latent_dim', 'b_info_rank', 'b_tau', 'b_routing',
+                                                        'b_info_updates', 'b_route_weight') if key in config})
+    if config.get('flow') and config['model'] != 'B':
         from .flow import LatentFlow
         model = LatentFlow(model, config.get('latent_dim', 32), config.get('latent_points', 256))
         if report:
@@ -145,7 +147,7 @@ def train(args):
               f'then --loss {config["loss"]}' + (' (restored from checkpoint)' if checkpoint else ''))
     elif args.stage_start is not None:
         raise ValueError('--stage-start requires --staged')
-    if config.get('flow'):
+    if config.get('flow') and config['model'] != 'B':
         if not checkpoint:
             config['ae_updates'] = args.ae_updates if args.ae_updates is not None else min(500, max(1, args.updates // 3))
         if not 1 <= config['ae_updates'] < config['updates']:
@@ -168,6 +170,9 @@ def train(args):
     logged_pdes = config.get('logged_pdes', list(PDES) if any(c['meta']['pde'] not in PDES[:4] for c in cases) else list(PDES[:4]))
     config['logged_pdes'] = logged_pdes
     config['training_geometries'] = sorted({c['meta']['geometry'] for c in cases})
+    if config['model'] == 'B':
+        from .prism_training import train_b
+        return train_b(config, cases, val_cases, checkpoint)
     validate_loss_options(cases, config['modes'], config['weights'])
     model = model_from_config(config, device)
     initial_model = model.base if config.get('flow') else model

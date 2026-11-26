@@ -555,8 +555,11 @@ class EGeo(AGeo):
 
 def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=None, report=True,
                 fourier_bands=6, wave_modes=32, initial_latent=None, assimilation=None, infer_operator=False,
-                f_variant='base', f_steps=3, joint_conditioning=False):
+                f_variant='base', f_steps=3, joint_conditioning=False, b_latent_dim=128,
+                b_info_rank=16, b_tau=1., b_routing='dynamic', b_info_updates=2, b_route_weight=.1):
     config = PRESETS[size].copy()
+    if kind == 'B':
+        config['layers'] = 6
     if kind in ('A', 'D', 'E', 'F') and size == 'l':
         config['layers'] = 8  # about 28M for A, nine FiLM layers give about 27M for C
     for name, value in dict(width=width, layers=layers, heads=heads, memory=memory).items():
@@ -568,6 +571,11 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
         raise ValueError('fourier-bands and wave-modes must be positive')
     classes = dict(A=AGeo, C=CGeo, D=DGeo, E=EGeo)
     options = dict(fourier_bands=fourier_bands) if kind == 'D' else dict(wave_modes=wave_modes) if kind == 'E' else {}
+    if kind == 'B':
+        from .prism import BGeo
+        classes['B'] = BGeo
+        options = dict(latent_dim=b_latent_dim, information_rank=b_info_rank, information_tau=b_tau,
+                       routing=b_routing, information_updates=b_info_updates, route_weight=b_route_weight)
     if joint_conditioning:
         if kind != 'A':
             raise ValueError('--joint-conditioning is only available for A-Geo')
@@ -585,7 +593,7 @@ def build_model(kind='A', size='s', width=None, layers=None, heads=None, memory=
                        assimilation=True if assimilation is None else assimilation, infer_operator=infer_operator,
                        f_variant=f_variant, f_steps=f_steps)
     if kind not in classes:
-        raise ValueError('available models are A, C, D, E and the new F; G/H were removed')
+        raise ValueError('available models are A, B, C, D, E and F; G/H were removed')
     model = classes[kind](**config, **options)
     if report:
         variant = ' joint-conditioning' if joint_conditioning else ''
